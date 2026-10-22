@@ -16,6 +16,12 @@ from .ribbon import PALETTE, checker, draw_swatch
 APP_NAME = "Folio Draw"
 
 
+def _commit_spins(*spins):
+    """Take what was typed into spin buttons even if the person never pressed Enter or Tab."""
+    for s in spins:
+        s.update()
+
+
 def _dialog(parent, title, ok="OK"):
     d = Gtk.Dialog(title=title, transient_for=parent, modal=True)
     d.set_resizable(False)
@@ -111,6 +117,7 @@ def resize_skew(parent, cur_w, cur_h, what="image"):
     r = d.run()
     out = None
     if r == Gtk.ResponseType.OK:
+        _commit_spins(hs, vs, sx, sy)
         if by_pct.get_active():
             w = max(1, round(cur_w * hs.get_value() / 100))
             h = max(1, round(cur_h * vs.get_value() / 100))
@@ -175,6 +182,7 @@ def image_properties(parent, doc, path, saved_at):
     r = d.run()
     out = None
     if r == Gtk.ResponseType.OK:
+        _commit_spins(ws, hs)
         f = factor[cur[0]]
         out = (max(1, min(32768, round(ws.get_value() * f))), max(1, min(32768, round(hs.get_value() * f))))
     d.destroy()
@@ -461,6 +469,12 @@ class EditColors(Gtk.Dialog):
 def edit_colors(parent, color, custom):
     d = EditColors(parent, color, custom)
     r = d.run()
+    if r == Gtk.ResponseType.OK:
+        focus = d.get_focus()
+        if isinstance(focus, Gtk.SpinButton):
+            focus.update()
+        elif focus is d.hex:
+            d._hex(d.hex)
     out = (d.rgba(), d.custom) if r == Gtk.ResponseType.OK else None
     d.destroy()
     return out
@@ -490,6 +504,7 @@ def layer_properties(parent, name, opacity, visible, blend, delay=0):
     sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
     sc.set_value(round(opacity * 100))
     sc.set_hexpand(True)
+    sc.set_draw_value(False)  # the spin button beside it already shows the number
     sc.get_style_context().add_class("fd-accent")
     sp = _spin(0, 100, round(opacity * 100))
     sc.connect("value-changed", lambda s: sp.set_value(s.get_value()))
@@ -507,6 +522,7 @@ def layer_properties(parent, name, opacity, visible, blend, delay=0):
     r = d.run()
     out = None
     if r == Gtk.ResponseType.OK:
+        _commit_spins(sp, ds)
         out = (ne.get_text() or name, sp.get_value() / 100, vis.get_active(), bc.get_active(), int(ds.get_value()))
     d.destroy()
     return out
