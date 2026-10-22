@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Draw
+GenericName=Drawing Program
+Comment=Draw and edit pictures with layers and real transparency
+Exec=folio-draw %F
+Icon=folio-draw
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;GTK;
+MimeType=image/png;image/jpeg;image/bmp;image/gif;image/openraster;
+Keywords=paint;draw;picture;image;mockup;layers;
+StartupWMClass=folio-draw
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Picture
+Exec=folio-draw
