@@ -247,6 +247,17 @@ class Canvas(Gtk.Grid):
         self.vadj.set_value(0)
         self.sync(full=True)
 
+    def _pull(self):
+        """Let the engine write its fresh pixels into the shared buffer, then tell cairo.
+        cairo requires flush() before the memory is changed behind its back (the X server
+        keeps a cached copy of the surface attached to it); marking a surface dirty without
+        it trips an assertion in cairo and aborts the program."""
+        self.surf.flush()
+        r = self.doc.comp_update()
+        if r:
+            self.surf.mark_dirty_rectangle(*r)
+        return r
+
     def sync(self, full=False):
         """Pull composited pixels from the engine and schedule the matching repaint."""
         doc = self.doc
@@ -260,9 +271,7 @@ class Canvas(Gtk.Grid):
             doc.invalidate()
             full = True
             self.update_adjustments()
-        r = doc.comp_update()
-        if r:
-            self.surf.mark_dirty_rectangle(*r)
+        r = self._pull()
         if full or r is None or True:
             # overlays (ants, handles) move with most changes; a full queue is cheap since
             # cairo clips the scaled paint to the damaged region anyway
@@ -280,9 +289,7 @@ class Canvas(Gtk.Grid):
         if (doc.h, doc.width, doc.height, doc.comp_ptr()) != self.surf_key:
             # the engine reallocated its buffer (e.g. flip/rotate/undo of one); rebind first
             self.sync(full=True)
-        r = doc.comp_update()
-        if r:
-            self.surf.mark_dirty_rectangle(*r)
+        self._pull()
         z = self.z
         ox, oy = self.ox, self.oy
         iw, ih = doc.width * z, doc.height * z
@@ -509,6 +516,17 @@ class Canvas(Gtk.Grid):
         off = HANDLE / 2 + 1
         return {"e": (ex + off, my), "s": (mx, ey + off), "se": (ex + off, ey + off)}
 
+    def _canvas_handle_hit(self, wx, wy):
+        """The canvas-resize handle under the pointer, but never one overlapping the picture:
+        a click on the image's last pixels must paint, whatever the zoom."""
+        x, y = self.to_doc(wx, wy)
+        if x < self.doc.width and y < self.doc.height:
+            return None
+        for name, (hx, hy) in self._canvas_handle_points().items():
+            if abs(wx - hx) <= HANDLE and abs(wy - hy) <= HANDLE:
+                return name
+        return None
+
     def _tick_ants(self):
         if self.doc is not None and (self.doc.sel_bounds() or self.doc.float_rect() or self.pending or self.text or self.marquee):
             self.ants = (self.ants + 1) % 8
@@ -631,10 +649,10 @@ class Canvas(Gtk.Grid):
         if self.drag:
             return
         if self._canvas_handles_visible():
-            for name, (hx, hy) in self._canvas_handle_points().items():
-                if abs(wx - hx) <= HANDLE and abs(wy - hy) <= HANDLE:
-                    self.set_cursor(HANDLE_CURSORS[name])
-                    return
+            name = self._canvas_handle_hit(wx, wy)
+            if name:
+                self.set_cursor(HANDLE_CURSORS[name])
+                return
         if self.text is not None:
             t = self.text
             h = self._hit_handle((t["x"], t["y"], t["x"] + t["w"], t["y"] + t["h"]), wx, wy)
@@ -824,11 +842,11 @@ class Canvas(Gtk.Grid):
 
         # canvas resize handles
         if self._canvas_handles_visible() and ev.button == 1:
-            for name, (hx, hy) in self._canvas_handle_points().items():
-                if abs(wx - hx) <= HANDLE and abs(wy - hy) <= HANDLE:
-                    self.drag = {"kind": "canvas", "handle": name, "start": (x, y), "orig": (doc.width, doc.height)}
-                    self.canvas_preview = (doc.width, doc.height)
-                    return True
+            name = self._canvas_handle_hit(wx, wy)
+            if name:
+                self.drag = {"kind": "canvas", "handle": name, "start": (x, y), "orig": (doc.width, doc.height)}
+                self.canvas_preview = (doc.width, doc.height)
+                return True
 
         tool = st.tool
         self.interacting = True

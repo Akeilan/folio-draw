@@ -361,7 +361,7 @@ class Ribbon(Gtk.Box):
 
         # Image
         self.transparent_item = menu_item("Transparent selection", check=self.st.transparent_sel,
-                                          cb=lambda: w.cmd("toggle_transparent_sel"))
+                                          cb=lambda: w.cmd("toggle_transparent_sel", self.transparent_item.get_active()))
         sel_menu = make_menu([
             ("Rectangular selection", "select", lambda: w.set_tool("select")),
             ("Free-form selection", "freeselect", lambda: w.set_tool("freeselect")),

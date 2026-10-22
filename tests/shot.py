@@ -18,8 +18,14 @@ def shot(win, path):
     pump(0.3)
     gw = win.get_window()
     w, h = gw.get_width(), gw.get_height()
-    pb = Gdk.pixbuf_get_from_window(gw, 0, 0, w, h)
-    pb.savev(path, "png", [], [])
+    # Copy through cairo rather than Gdk.pixbuf_get_from_window: the latter trips a cairo
+    # assertion (mark_dirty on a surface carrying mime data) on some Xvfb/GDK combinations.
+    import cairo
+    img = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+    cr = cairo.Context(img)
+    Gdk.cairo_set_source_window(cr, gw, 0, 0)
+    cr.paint()
+    img.write_to_png(path)
 
 def make():
     app = App(); app.register(None); app.do_startup() if False else None
