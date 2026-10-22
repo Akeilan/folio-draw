@@ -842,8 +842,10 @@ class Window(Gtk.ApplicationWindow):
         self.canvas.sel_path = None
         self.canvas.sync()
 
-    def c_toggle_transparent_sel(self):
-        self.state.transparent_sel = not self.state.transparent_sel
+    def c_toggle_transparent_sel(self, on=None):
+        # an explicit value from the check item; refresh() then re-syncs the item to the same
+        # value, which emits nothing (a bare toggle here would ping-pong with the item forever)
+        self.state.transparent_sel = (not self.state.transparent_sel) if on is None else bool(on)
         if self.state.transparent_sel and self.doc.float_rect():
             self.doc.float_color_key(self.state.color2, 0)
             self.canvas.sync()
