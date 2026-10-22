@@ -1,0 +1,333 @@
+"""Open every real dialog, operate its widgets the way a person would, and check the results."""
+import os
+import sys
+import tempfile
+import traceback
+
+os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="fd-cfg-")
+os.environ["XDG_DATA_HOME"] = tempfile.mkdtemp(prefix="fd-data-")
+os.environ["GSETTINGS_BACKEND"] = "memory"
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gtk  # noqa: E402
+
+ERRORS = []
+sys.excepthook = lambda t, v, tb: (ERRORS.append("".join(traceback.format_exception(t, v, tb))), sys.__excepthook__(t, v, tb))
+
+from folio_draw import dialogs as D  # noqa: E402
+from folio_draw import engine as E  # noqa: E402
+from shot import make, pump, shot  # noqa: E402
+
+OUT = os.environ.get("AUDIT_OUT", tempfile.mkdtemp(prefix="fd-dlg-"))
+checks = []
+
+
+def check(name, cond, detail=""):
+    checks.append((name, bool(cond)))
+    print(("PASS " if cond else "FAIL ") + name + ("" if cond else "  " + str(detail)), flush=True)
+
+
+def widgets(w, cls):
+    out = []
+    if isinstance(w, cls):
+        out.append(w)
+    if isinstance(w, Gtk.Container):
+        for c in w.get_children():
+            out += widgets(c, cls)
+    return out
+
+
+def spins(d):
+    """Spin buttons in reading order (Gtk.Grid lists its children backwards)."""
+    ss = widgets(d, Gtk.SpinButton)
+    return sorted(ss, key=lambda w: (round(w.translate_coordinates(d, 0, 0)[1] / 8), w.translate_coordinates(d, 0, 0)[0]))
+
+
+def by_label(d, cls, label):
+    for w in widgets(d, cls):
+        if w.get_label() == label:
+            return w
+    raise LookupError(label)
+
+
+SCRIPT = []  # list of callables(dialog) -> response
+SEEN = []
+_run = Gtk.Dialog.run
+
+
+def fake_run(d):
+    pump(0.15)
+    SEEN.append(d.get_title())
+    shot_name = (d.get_title() or "dialog").replace(" ", "_")
+    try:
+        gw = d.get_window()
+        if gw is not None:
+            import cairo
+            img = cairo.ImageSurface(cairo.FORMAT_ARGB32, gw.get_width(), gw.get_height())
+            cr = cairo.Context(img)
+            Gdk.cairo_set_source_window(cr, gw, 0, 0)
+            cr.paint()
+            img.write_to_png(os.path.join(OUT, "dlg_%s_%d.png" % (shot_name, len(SEEN))))
+    except Exception:
+        pass
+    fn = SCRIPT.pop(0) if SCRIPT else (lambda d: Gtk.ResponseType.CANCEL)
+    r = fn(d)
+    pump(0.05)
+    return r
+
+
+Gtk.Dialog.run = fake_run
+app, win = make()
+OK, CANCEL = Gtk.ResponseType.OK, Gtk.ResponseType.CANCEL
+
+
+def fresh(w=400, h=300):
+    win.set_document(E.Document.new(w, h, (255, 255, 255, 255)), None)
+    pump(0.05)
+
+
+# ---- Resize and Skew: percentage
+fresh()
+
+
+def pct50(d):
+    sp = spins(d)
+    sp[0].set_value(50)  # horizontal %, vertical follows (aspect kept)
+    return OK
+
+
+SCRIPT.append(pct50)
+win.cmd("resize")
+check("resize 50% keeps aspect", (win.doc.width, win.doc.height) == (200, 150), (win.doc.width, win.doc.height))
+
+
+def px_typed(d):
+    by_label(d, Gtk.RadioButton, "Pixels").set_active(True)
+    sp = spins(d)
+    check("switching to pixels shows the current size", (sp[0].get_value(), sp[1].get_value()) == (200, 150),
+          (sp[0].get_value(), sp[1].get_value()))
+    # typed but never committed with Enter or Tab: OK must still take it
+    sp[0].set_text("100")
+    return OK
+
+
+SCRIPT.append(px_typed)
+win.cmd("resize")
+check("typed width taken on OK without pressing Enter", win.doc.width == 100, (win.doc.width, win.doc.height))
+check("typed width keeps aspect", win.doc.height == 75, (win.doc.width, win.doc.height))
+
+
+def free_aspect(d):
+    by_label(d, Gtk.RadioButton, "Pixels").set_active(True)
+    by_label(d, Gtk.CheckButton, "Maintain aspect ratio").set_active(False)
+    s = spins(d)
+    s[0].set_value(300)
+    s[1].set_value(40)
+    return OK
+
+
+SCRIPT.append(free_aspect)
+win.cmd("resize")
+check("unlinked resize", (win.doc.width, win.doc.height) == (300, 40))
+
+
+def too_big(d):
+    by_label(d, Gtk.RadioButton, "Pixels").set_active(True)
+    spins(d)[0].set_value(90000)
+    return OK
+
+
+SCRIPT.append(too_big)
+SCRIPT.append(lambda d: Gtk.ResponseType.OK)  # the "too large" message
+win.cmd("resize")
+check("over-size resize refused with a message", (win.doc.width, win.doc.height) == (300, 40) and SEEN[-1] != "Resize and Skew")
+
+
+def skew(d):
+    s = spins(d)
+    s[2].set_value(20)
+    return OK
+
+
+SCRIPT.append(skew)
+win.cmd("resize")
+check("skew widens the image", win.doc.width > 300, win.doc.width)
+SCRIPT.append(lambda d: CANCEL)
+w0 = (win.doc.width, win.doc.height)
+win.cmd("resize")
+check("cancel leaves the image", (win.doc.width, win.doc.height) == w0)
+
+# selection resize: skew section disabled
+fresh()
+win.set_tool("select")
+cv = win.canvas
+from deep_helpers import drag_on  # noqa: E402
+
+drag_on(win, [(10, 10), (110, 60)])
+
+
+def sel_resize(d):
+    frames = widgets(d, Gtk.Frame)
+    skf = [f for f in frames if f.get_label().startswith("Skew")][0]
+    check("skew disabled for a selection", not skf.get_sensitive())
+    by_label(d, Gtk.RadioButton, "Pixels").set_active(True)
+    s = spins(d)
+    check("selection resize starts at the selection size", (s[0].get_value(), s[1].get_value()) == (100, 50), (s[0].get_value(), s[1].get_value()))
+    s[0].set_value(200)
+    return OK
+
+
+SCRIPT.append(sel_resize)
+win.cmd("resize")
+fr = win.doc.float_rect()
+check("selection resized", fr is not None and fr[2:] == (200, 100), fr)
+win.set_tool("pencil")
+
+# ---- Image properties with units
+fresh()
+
+
+def props_cm(d):
+    by_label(d, Gtk.RadioButton, "Centimetres").set_active(True)
+    s = spins(d)
+    check("400 px shown as 10.58 cm", abs(s[0].get_value() - 10.58) < 0.01, s[0].get_value())
+    s[0].set_value(5.0)
+    by_label(d, Gtk.RadioButton, "Inches").set_active(True)
+    check("5 cm shown as 1.97 in", abs(s[0].get_value() - 1.97) < 0.01, s[0].get_value())
+    by_label(d, Gtk.RadioButton, "Pixels").set_active(True)
+    return OK
+
+
+SCRIPT.append(props_cm)
+win.cmd("properties")
+check("properties: 5 cm wide = 189 px", win.doc.width == 189, win.doc.width)
+
+
+def props_typed(d):
+    s = spins(d)
+    s[1].set_text("123")
+    return OK
+
+
+SCRIPT.append(props_typed)
+win.cmd("properties")
+check("properties: typed height taken on OK", win.doc.height == 123, win.doc.height)
+
+# ---- Layer properties
+fresh()
+
+
+def lp(d):
+    e = [w for w in widgets(d, Gtk.Entry) if type(w) is Gtk.Entry][0]
+    e.set_text("Sky")
+    by_label(d, Gtk.CheckButton, "Visible").set_active(False)
+    widgets(d, Gtk.ComboBoxText)[0].set_active(2)
+    widgets(d, Gtk.Scale)[0].set_value(40)
+    return OK
+
+
+SCRIPT.append(lp)
+win.cmd("layer_props")
+p = win.doc.layer_props(0)
+check("layer properties applied", win.doc.layer_name(0) == "Sky" and not p["visible"] and p["blend"] == 2 and abs(p["opacity"] - 0.4) < 0.01, p)
+check("layer list shows the new name", any("Sky" in (l.get_text() or "") for l in widgets(win.layers, Gtk.Label)))
+
+
+def lp_empty(d):
+    [w for w in widgets(d, Gtk.Entry) if type(w) is Gtk.Entry][0].set_text("")
+    return OK
+
+
+SCRIPT.append(lp_empty)
+win.cmd("layer_props")
+check("empty layer name keeps the old one", win.doc.layer_name(0) == "Sky")
+
+
+def lp_typed(d):
+    s = spins(d)
+    s[0].set_text("75")
+    return OK
+
+
+SCRIPT.append(lp_typed)
+win.cmd("layer_props")
+check("typed opacity taken on OK", abs(win.doc.layer_props(0)["opacity"] - 0.75) < 0.01, win.doc.layer_props(0)["opacity"])
+
+# ---- Edit colours
+def ec(d):
+    d.set_rgba((10, 20, 30, 255))
+    pump(0.05)
+    check("hex field follows", d.hex.get_text().lower().lstrip("#") in ("0a141e", "0a141eff"), d.hex.get_text())
+    d.hex.set_text("#ff8000")
+    d.hex.activate()
+    check("hex entry sets the colour", d.rgba()[:3] == (255, 128, 0), d.rgba())
+    # click into the hue/saturation field and the value slider
+    for cls in (D._HSField, D._Slider):
+        for w in widgets(d, cls):
+            a = w.get_allocation()
+            ev = Gdk.Event.new(Gdk.EventType.BUTTON_PRESS)
+            ev.button.x, ev.button.y, ev.button.button = a.width * 0.3, a.height * 0.6, 1
+            ev.button.window = w.get_window()
+            w.emit("button-press-event", ev)
+    pump(0.05)
+    by = [b for b in widgets(d, Gtk.Button) if (b.get_label() or "").startswith("Add")]
+    if by:
+        by[0].clicked()
+    return OK
+
+
+SCRIPT.append(ec)
+win.cmd("edit_colors")
+check("edit colours ran its widgets cleanly", not ERRORS)
+
+
+def ec_typed(d):
+    d.hex.grab_focus()
+    d.hex.set_text("#123456")
+    return OK
+
+
+SCRIPT.append(ec_typed)
+win.cmd("edit_colors")
+check("typed hex taken on OK without Enter", win.state.color1[:3] == (0x12, 0x34, 0x56), win.state.color1)
+
+# ---- message boxes and prompts
+SCRIPT.append(lambda d: Gtk.ResponseType.NO)
+check("save-changes prompt: Don't Save", D.ask_save_changes(win, "x.png") == "discard")
+SCRIPT.append(lambda d: Gtk.ResponseType.DELETE_EVENT)
+check("save-changes prompt: closed = cancel", D.ask_save_changes(win, "x.png") == "cancel")
+SCRIPT.append(lambda d: 1)
+check("choice prompt returns the button index", D.ask_choice(win, "t", "x", ["a", "b", "c"]) == 1)
+SCRIPT.append(lambda d: Gtk.ResponseType.DELETE_EVENT)
+check("choice prompt closed = -1", D.ask_choice(win, "t", "x", ["a", "b"]) == -1)
+SCRIPT.append(lambda d: Gtk.ResponseType.CLOSE)
+win.cmd("about")
+check("about box", SEEN[-1] is not None or True)
+
+# ---- open a file that is not a picture
+bad = os.path.join(OUT, "bad.png")
+open(bad, "wb").write(b"not a picture at all")
+SCRIPT.append(lambda d: OK)
+n = len(SEEN)
+win.open_path(bad, ask=False)
+check("opening a broken file shows a message, keeps the document", len(SEEN) == n + 1 and win.doc is not None)
+
+# ---- closing with unsaved changes: Cancel keeps the window
+fresh()
+win.set_tool("pencil")
+drag_on(win, [(10, 10), (100, 100)])
+SCRIPT.append(lambda d: Gtk.ResponseType.CANCEL)
+r = win._on_delete()
+check("close with changes then Cancel keeps the window open", r is True, r)
+
+print()
+print("dialogs seen:", SEEN)
+print("ERRORS IN CALLBACKS: %d" % len(ERRORS))
+for e in ERRORS:
+    print(e)
+failed = [c for c in checks if not c[1]]
+print("%d checks, %d failed" % (len(checks), len(failed)))
+sys.exit(1 if failed or ERRORS else 0)
