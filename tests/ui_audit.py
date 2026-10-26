@@ -246,10 +246,36 @@ cv.text["view"].get_buffer().set_text("Hello Folio")
 win.cmd("text_style", "bold", True)
 win.cmd("text_size", 28)
 before = doc.changes
+n_layers = doc.layer_count()
 cv.text_commit()
 check("text rendered onto the layer", doc.changes > before and any(px(x, y)[0] < 50 and px(x, y)[3] > 200 for x in range(700, 900, 2) for y in range(35, 70, 2)))
 check("Text tab hidden after commit", not win.ribbon.tab_buttons["text"].get_visible())
 win.cmd("text_style", "bold", False)
+# the text stays editable: a text layer, typed again by clicking it with the Text tool
+ti = doc.active
+check("the text goes on its own text layer", doc.layer_count() == n_layers + 1 and '"Hello Folio"' in doc.layer_text(ti),
+      (doc.layer_count(), doc.layer_text(ti)[:60]))
+click(760, 50)
+check("clicking it with the Text tool opens it again", cv.text is not None and cv.text.get("layer") == ti and
+      cv.text["view"].get_buffer().get_text(*cv.text["view"].get_buffer().get_bounds(), True) == "Hello Folio")
+check("with its settings back (bold, 28 pt)", win.state.bold and win.state.font_size == 28, (win.state.bold, win.state.font_size))
+check("and its pixels out of the way while typing", not doc.layer_props(ti)["visible"])
+cv.text["view"].get_buffer().set_text("Hi")
+cv.text_commit()
+check("typed again it shows the new text", '"Hi"' in doc.layer_text(ti) and doc.layer_props(ti)["visible"] and
+      doc.layer_count() == n_layers + 1)
+check("the old letters are gone", not any(px(x, y)[3] > 200 for x in range(840, 900, 2) for y in range(35, 70, 2)))
+win.cmd("undo")
+check("undo brings the first text back", '"Hello Folio"' in doc.layer_text(ti))
+win.cmd("redo")
+click(760, 50)
+key("Escape")
+check("Escape leaves it as it was", cv.text is None and '"Hi"' in doc.layer_text(ti) and doc.layer_props(ti)["visible"])
+win.cmd("text_style", "bold", False)
+win.state.bold = False
+# the rest of the audit works on one layer: put the text down into it
+win.cmd("layer_merge")
+check("merged down, back to one layer", doc.layer_count() == n_layers, doc.layer_count())
 
 # ---- selection: rect select, move (cut), undo as one step
 win.set_tool("select")

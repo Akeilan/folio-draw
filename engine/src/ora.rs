@@ -18,6 +18,7 @@ const OPS: [(u8, &str); 8] = [
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+        .replace('\n', "&#10;").replace('\r', "&#13;").replace('\t', "&#9;")
 }
 
 fn unesc(s: &str) -> String {
@@ -68,14 +69,15 @@ pub fn save(doc: &Doc) -> Vec<u8> {
         let src = format!("data/layer{}.png", i);
         let op = OPS.iter().find(|o| o.0 == l.blend).map(|o| o.1).unwrap_or("svg:src-over");
         xml.push_str(&format!(
-            "  <layer name=\"{}\" src=\"{}\" x=\"0\" y=\"0\" opacity=\"{:.3}\" visibility=\"{}\" composite-op=\"{}\"{}{} />\n",
+            "  <layer name=\"{}\" src=\"{}\" x=\"0\" y=\"0\" opacity=\"{:.3}\" visibility=\"{}\" composite-op=\"{}\"{}{}{} />\n",
             esc(&l.name),
             src,
             l.opacity,
             if l.visible { "visible" } else { "hidden" },
             op,
             if i == doc.active { " selected=\"true\"" } else { "" },
-            if l.delay_ms > 0 { format!(" folio:delay=\"{}\"", l.delay_ms) } else { String::new() }
+            if l.delay_ms > 0 { format!(" folio:delay=\"{}\"", l.delay_ms) } else { String::new() },
+            if l.text.is_empty() { String::new() } else { format!(" folio:text=\"{}\"", esc(&l.text)) }
         ));
         z.add(&src, &png::encode(doc.w, doc.h, &l.px, 6), false);
     }
@@ -159,6 +161,9 @@ pub fn load(data: &[u8]) -> Result<Doc, String> {
         doc.push_layer(&name, px, opacity, visible, blend);
         if let Some(dl) = attr(tag, "folio:delay").and_then(|v| v.parse::<u32>().ok()) {
             doc.layers.last_mut().unwrap().delay_ms = dl;
+        }
+        if let Some(t) = attr(tag, "folio:text") {
+            doc.layers.last_mut().unwrap().text = t;
         }
     }
     if doc.layers.is_empty() {

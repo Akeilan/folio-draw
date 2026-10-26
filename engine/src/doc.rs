@@ -35,6 +35,8 @@ pub struct Layer {
     pub blend: u8,
     /// Animation frame duration in milliseconds (GIF frames); 0 = not set.
     pub delay_ms: u32,
+    /// A text layer: what it was typed with (the app's own description, JSON); empty for pixels.
+    pub text: String,
 }
 
 pub struct Float {
@@ -67,6 +69,8 @@ pub enum UndoKind {
     Full { w: usize, h: usize, layers: Vec<Layer>, active: usize },
     Structure { order: Vec<u32>, active: usize, pool: Vec<Layer>, mods: Vec<(u32, Vec<u8>)> },
     Props { layer_id: u32, name: String, opacity: f32, visible: bool, blend: u8, delay_ms: u32 },
+    /// A text layer typed again (or turned into pixels): its pixels and description before.
+    Text { layer_id: u32, text: String, px: Vec<u8> },
 }
 
 pub struct UndoStep {
@@ -497,7 +501,7 @@ impl Doc {
             }
         }
         let mut d = Doc::empty(w, h);
-        d.layers.push(Layer { id: 1, name: "Background".into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0 });
+        d.layers.push(Layer { id: 1, name: "Background".into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0, text: String::new() });
         d.next_id = 2;
         d
     }
@@ -535,7 +539,7 @@ impl Doc {
 
     pub fn from_rgba(w: usize, h: usize, px: Vec<u8>, name: &str) -> Doc {
         let mut d = Doc::empty(w, h);
-        d.layers.push(Layer { id: 1, name: name.into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0 });
+        d.layers.push(Layer { id: 1, name: name.into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0, text: String::new() });
         d.next_id = 2;
         d
     }
@@ -543,7 +547,7 @@ impl Doc {
     pub fn push_layer(&mut self, name: &str, px: Vec<u8>, opacity: f32, visible: bool, blend: u8) {
         let id = self.next_id;
         self.next_id += 1;
-        self.layers.push(Layer { id, name: name.into(), px, opacity, visible, blend, delay_ms: 0 });
+        self.layers.push(Layer { id, name: name.into(), px, opacity, visible, blend, delay_ms: 0, text: String::new() });
         self.mark_all();
     }
 
@@ -762,6 +766,11 @@ impl Doc {
         if self.op.is_some() || self.layers.is_empty() {
             return;
         }
+        if !self.layers[self.active].text.is_empty() {
+            // painting on a text layer turns it into an ordinary one (its own undo step)
+            let i = self.active;
+            self.text_layer_set(i, "", None);
+        }
         let id = self.layers[self.active].id;
         self.op = Some(OpState { layer_id: id, tiles: HashMap::new() });
     }
@@ -934,6 +943,16 @@ impl Doc {
                 self.mark_all();
                 UndoKind::Structure { order: cur_order, active: cur_active, pool: current, mods: new_mods }
             }
+            UndoKind::Text { layer_id, text, px } => {
+                if let Some(li) = self.layer_idx(layer_id) {
+                    let l = &mut self.layers[li];
+                    let rev = UndoKind::Text { layer_id, text: std::mem::replace(&mut l.text, text), px: std::mem::replace(&mut l.px, px) };
+                    self.mark_all();
+                    rev
+                } else {
+                    UndoKind::Text { layer_id, text, px }
+                }
+            }
             UndoKind::Props { layer_id, name, opacity, visible, blend, delay_ms } => {
                 if let Some(li) = self.layer_idx(layer_id) {
                     let l = &mut self.layers[li];
@@ -971,6 +990,10 @@ impl Doc {
     fn snapshot_full(&mut self) {
         let kind = UndoKind::Full { w: self.w, h: self.h, layers: self.layers.clone(), active: self.active };
         self.push_undo(kind);
+        // the whole picture changes shape: text layers become their pixels (undo brings them back)
+        for l in self.layers.iter_mut() {
+            l.text.clear();
+        }
     }
 
     // -------------------------------------------------------------- selection helpers
@@ -1127,6 +1150,10 @@ impl Doc {
         }
         self.finish_pending();
         let Some((x0, y0, x1, y1)) = self.sel_bounds() else { return false };
+        if !self.layers.is_empty() && !self.layers[self.active].text.is_empty() {
+            let i = self.active;
+            self.text_layer_set(i, "", None);
+        }
         let (fw, fh) = (x1 - x0, y1 - y0);
         let li = self.active;
         let mut src = vec![0u8; fw * fh * 4];
@@ -1863,6 +1890,69 @@ impl Doc {
 
     // -------------------------------------------------------------- layers
 
+    /// The pixels of a text layer: `block` (premultiplied BGRA, cairo's) placed at x, y on an
+    /// otherwise clear layer.
+    fn text_pixels(&self, x: i64, y: i64, bw: usize, bh: usize, block: &[u8], stride: usize) -> Vec<u8> {
+        let mut px = vec![0u8; self.w * self.h * 4];
+        for r in 0..bh {
+            let yy = y + r as i64;
+            if yy < 0 || yy >= self.h as i64 {
+                continue;
+            }
+            for c in 0..bw {
+                let xx = x + c as i64;
+                if xx < 0 || xx >= self.w as i64 {
+                    continue;
+                }
+                let s = &block[r * stride + c * 4..r * stride + c * 4 + 4];
+                let a = s[3];
+                if a == 0 {
+                    continue;
+                }
+                let o = (yy as usize * self.w + xx as usize) * 4;
+                let un = |v: u8| ((v as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                px[o..o + 4].copy_from_slice(&[un(s[2]), un(s[1]), un(s[0]), a]);
+            }
+        }
+        px
+    }
+
+    /// A new text layer above the active one, holding the typed text (one undo step).
+    pub fn text_layer_add(&mut self, name: &str, text: &str, x: i64, y: i64, bw: usize, bh: usize, block: &[u8], stride: usize) -> usize {
+        self.commit_float();
+        self.finish_pending();
+        let (order, act) = (self.order(), self.active);
+        let id = self.next_id;
+        self.next_id += 1;
+        let pos = if self.layers.is_empty() { 0 } else { self.active + 1 };
+        let delay = self.layers.get(self.active).map_or(0, |l| l.delay_ms);
+        let px = self.text_pixels(x, y, bw, bh, block, stride);
+        self.layers.insert(pos, Layer { id, name: name.into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: delay, text: text.into() });
+        self.active = pos;
+        self.structure_step(order, act, Vec::new(), Vec::new());
+        pos
+    }
+
+    /// A text layer typed again: new pixels and description (one undo step). An empty
+    /// description with no block turns it into an ordinary layer, its pixels kept.
+    pub fn text_layer_set(&mut self, i: usize, text: &str, block: Option<(i64, i64, usize, usize, &[u8], usize)>) {
+        if i >= self.layers.len() {
+            return;
+        }
+        self.commit_float();
+        self.finish_pending();
+        let new_px = match block {
+            Some((x, y, bw, bh, b, st)) => self.text_pixels(x, y, bw, bh, b, st),
+            None => self.layers[i].px.clone(),
+        };
+        let l = &mut self.layers[i];
+        let old_px = std::mem::replace(&mut l.px, new_px);
+        let old_text = std::mem::replace(&mut l.text, text.to_string());
+        let id = l.id;
+        self.push_undo(UndoKind::Text { layer_id: id, text: old_text, px: old_px });
+        self.mark_all();
+    }
+
     fn structure_step(&mut self, order: Vec<u32>, active: usize, pool: Vec<Layer>, mods: Vec<(u32, Vec<u8>)>) {
         self.push_undo(UndoKind::Structure { order, active, pool, mods });
         self.mark_all();
@@ -1880,7 +1970,7 @@ impl Doc {
         self.next_id += 1;
         let pos = if self.layers.is_empty() { 0 } else { self.active + 1 };
         let delay = self.layers.get(self.active).map_or(0, |l| l.delay_ms);
-        self.layers.insert(pos, Layer { id, name: name.into(), px: vec![0u8; self.w * self.h * 4], opacity: 1.0, visible: true, blend: 0, delay_ms: delay });
+        self.layers.insert(pos, Layer { id, name: name.into(), px: vec![0u8; self.w * self.h * 4], opacity: 1.0, visible: true, blend: 0, delay_ms: delay, text: String::new() });
         self.active = pos;
         self.structure_step(order, act, Vec::new(), Vec::new());
         pos
@@ -1985,7 +2075,7 @@ impl Doc {
         let old = std::mem::take(&mut self.layers);
         let id = self.next_id;
         self.next_id += 1;
-        self.layers.push(Layer { id, name: "Background".into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0 });
+        self.layers.push(Layer { id, name: "Background".into(), px, opacity: 1.0, visible: true, blend: 0, delay_ms: 0, text: String::new() });
         self.active = 0;
         self.structure_step(order, act, old, Vec::new());
     }
@@ -2397,6 +2487,7 @@ fn step_bytes(k: &UndoKind) -> usize {
         UndoKind::Tiles { tiles, .. } => tiles.iter().map(|t| t.1.len() + 16).sum(),
         UndoKind::Full { layers, .. } => layers.iter().map(|l| l.px.len()).sum(),
         UndoKind::Structure { pool, mods, .. } => pool.iter().map(|l| l.px.len()).sum::<usize>() + mods.iter().map(|m| m.1.len()).sum::<usize>(),
+        UndoKind::Text { px, text, .. } => px.len() + text.len(),
         UndoKind::Props { name, .. } => name.len(),
     }
 }

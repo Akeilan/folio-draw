@@ -695,6 +695,44 @@ pub unsafe extern "C" fn fd_layer_name(p: *mut Doc, i: u32, buf: *mut u8, len: u
     }
     b.len() as u32
 }
+#[no_mangle]
+pub unsafe extern "C" fn fd_layer_text(p: *mut Doc, i: u32, buf: *mut u8, len: u32) -> u32 {
+    let Some(doc) = d(p) else { return 0 };
+    let Some(l) = doc.layers.get(i as usize) else { return 0 };
+    let b = l.text.as_bytes();
+    if !buf.is_null() && len > 0 {
+        let n = b.len().min(len as usize - 1);
+        std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+        *buf.add(n) = 0;
+    }
+    b.len() as u32
+}
+/// A new text layer from cairo's premultiplied BGRA block at x, y.
+#[no_mangle]
+pub unsafe extern "C" fn fd_text_layer_add(p: *mut Doc, name: *const c_char, text: *const c_char, x: i32, y: i32, w: u32, h: u32, data: *const u8, stride: u32) -> u32 {
+    guard(0, || {
+        let Some(doc) = d(p) else { return 0 };
+        let name = cstr(name);
+        let text = cstr(text);
+        let block = std::slice::from_raw_parts(data, stride as usize * h as usize);
+        doc.text_layer_add(&name, &text, x as i64, y as i64, w as usize, h as usize, block, stride as usize) as u32
+    })
+}
+/// A text layer typed again (data null: only the description changes, e.g. emptied to rasterize).
+#[no_mangle]
+pub unsafe extern "C" fn fd_text_layer_set(p: *mut Doc, i: u32, text: *const c_char, x: i32, y: i32, w: u32, h: u32, data: *const u8, stride: u32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            let text = cstr(text);
+            if data.is_null() {
+                doc.text_layer_set(i as usize, &text, None);
+            } else {
+                let block = std::slice::from_raw_parts(data, stride as usize * h as usize);
+                doc.text_layer_set(i as usize, &text, Some((x as i64, y as i64, w as usize, h as usize, block, stride as usize)));
+            }
+        }
+    })
+}
 /// out: [opacity, visible, blend, id, delay_ms]
 #[no_mangle]
 pub unsafe extern "C" fn fd_layer_props(p: *mut Doc, i: u32, out: *mut f32) -> i32 {
