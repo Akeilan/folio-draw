@@ -330,6 +330,7 @@ class Backstage(Gtk.Box):
         return box
 
     def page_print(self):
+        from . import pagesetup as PS
         box = self._page("Print")
         w = self.win
         h = Gtk.Box(spacing=30)
@@ -338,46 +339,17 @@ class Backstage(Gtk.Box):
         pb.get_style_context().add_class("fd-primary")
         pb.set_name("print")
         pb.set_size_request(120, 40)
+        pb.set_halign(Gtk.Align.START)
         pb.connect("clicked", lambda *_: self._run("print"))
         left.pack_start(pb, False, False, 0)
-        note = Gtk.Label(label="The picture prints at its own size,\nshrunk to fit the page when it is larger.", xalign=0)
-        note.get_style_context().add_class("dim-label")
-        left.pack_start(note, False, False, 0)
+        head = Gtk.Label(label="Page setup", xalign=0)
+        head.get_style_context().add_class("fd-bs-sub")
+        left.pack_start(head, False, False, 6)
+        self.print_preview = PS.Preview(w)
+        self.page_setup = PS.PageSetup(w, on_change=lambda s: self.print_preview.refresh())
+        left.pack_start(self.page_setup, False, False, 0)
         h.pack_start(left, False, False, 0)
-        # page preview: the picture fitted on a portrait sheet
-        area = Gtk.DrawingArea()
-        area.set_size_request(300, 400)
-        area.set_name("preview")
-
-        def draw(a, cr):
-            aw, ah = a.get_allocated_width(), a.get_allocated_height()
-            cr.set_source_rgb(0.9, 0.9, 0.9)
-            cr.paint()
-            pw, ph = aw - 40, (aw - 40) * 297 / 210
-            if ph > ah - 40:
-                ph = ah - 40
-                pw = ph * 210 / 297
-            px, py = (aw - pw) / 2, (ah - ph) / 2
-            cr.set_source_rgb(1, 1, 1)
-            cr.rectangle(px, py, pw, ph)
-            cr.fill()
-            surf = w.canvas.surf
-            if surf is not None and w.doc is not None:
-                m = pw * 0.06
-                k = min((pw - 2 * m) / w.doc.width, (ph - 2 * m) / w.doc.height, pw / 794.0)
-                cr.save()
-                cr.translate(px + m, py + m)
-                cr.scale(k, k)
-                cr.set_source_surface(surf, 0, 0)
-                cr.paint()
-                cr.restore()
-            cr.set_source_rgb(0.7, 0.7, 0.7)
-            cr.set_line_width(1)
-            cr.rectangle(px + 0.5, py + 0.5, pw - 1, ph - 1)
-            cr.stroke()
-            return False
-        area.connect("draw", draw)
-        h.pack_start(area, False, False, 0)
+        h.pack_start(self.print_preview, False, False, 0)
         box.pack_start(h, False, False, 0)
         return box
 

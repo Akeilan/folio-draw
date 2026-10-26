@@ -55,6 +55,7 @@ SEARCH_COMMANDS = [
     ("Open", ("open",), "Ctrl+O"), ("Save", ("save",), "Ctrl+S"), ("Save as", ("save_as",), "F12"),
     ("Print", ("print",), "Ctrl+P"), ("Set as desktop background", ("wallpaper",), ""),
     ("Image properties", ("properties",), "Ctrl+E"), ("Close picture", ("close",), ""),
+    ("Page setup", ("page_setup",), ""),
     ("Undo", ("undo",), "Ctrl+Z"), ("Redo", ("redo",), "Ctrl+Y"),
     ("Cut", ("cut",), "Ctrl+X"), ("Copy", ("copy",), "Ctrl+C"), ("Paste", ("paste",), "Ctrl+V"),
     ("Paste as new layer", ("paste_layer",), "Ctrl+Shift+V"), ("Paste from file", ("paste_from",), ""),
@@ -101,6 +102,7 @@ class State:
         self.fill_shape = False
         self.transparent_sel = False
         self.sample_all = False
+        self.page = {}                  # Page setup (see pagesetup.DEFAULTS)
         self.view = {"rulers": False, "grid": False, "statusbar": True, "layers": True}
         self.font_family = "Sans"
         self.font_size = 14.0
@@ -110,7 +112,7 @@ class State:
         self.qat = ["save", "undo", "redo"]
 
     KEYS = ["brush", "shape", "color1", "color2", "custom_colors", "sizes", "tolerance", "outline", "fill_shape",
-            "transparent_sel", "sample_all", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
+            "transparent_sel", "sample_all", "page", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
 
     def load(self):
         try:
@@ -1391,8 +1393,7 @@ class Window(Gtk.ApplicationWindow):
             self.fullscreen()
 
     # ---- print & wallpaper
-    def c_print(self):
-        self.finalize_pending()
+    def _print_surface(self):
         import cairo
         doc = self.doc
         data = bytearray(doc.flatten_rgba())
@@ -1403,28 +1404,45 @@ class Window(Gtk.ApplicationWindow):
             data[i] = b * a // 255
             data[i + 1] = g * a // 255
             data[i + 2] = r * a // 255
-        surf = cairo.ImageSurface.create_for_data(data, cairo.FORMAT_ARGB32, w, h, w * 4)
+        return cairo.ImageSurface.create_for_data(data, cairo.FORMAT_ARGB32, w, h, w * 4)
+
+    def print_operation(self):
+        """A print job laid out by Page setup (paper, orientation, margins, scaling)."""
+        from . import pagesetup as PS
+        s = PS.settings(self.state)
+        surf = self._print_surface()
+        pages = PS.layout(s, self.doc.width, self.doc.height)
         op = Gtk.PrintOperation()
-        op.set_n_pages(1)
+        op.set_n_pages(len(pages))
         op.set_job_name(os.path.basename(self.path) if self.path else "Untitled")
-        op.set_embed_page_setup(True)
+        setup = Gtk.PageSetup()
+        pw, ph = PS.paper_size(dict(s, landscape=False))
+        setup.set_paper_size(Gtk.PaperSize.new_custom(s["paper"], s["paper"], pw, ph, Gtk.Unit.MM))
+        setup.set_orientation(Gtk.PageOrientation.LANDSCAPE if s["landscape"] else Gtk.PageOrientation.PORTRAIT)
+        for side in ("top", "right", "bottom", "left"):
+            getattr(setup, "set_%s_margin" % side)(0, Gtk.Unit.MM)
+        op.set_default_page_setup(setup)
+        op.set_use_full_page(True)
+        op.set_unit(Gtk.Unit.MM)
 
         def draw_page(op, ctx, n):
-            cr = ctx.get_cairo_context()
-            pw, ph = ctx.get_width(), ctx.get_height()
-            # print at 96 dpi, shrinking only when the picture doesn't fit
-            dpi = ctx.get_dpi_x()
-            sc = dpi / 96.0
-            sc = min(sc, pw / w, ph / h)
-            cr.scale(sc, sc)
-            cr.set_source_surface(surf, 0, 0)
-            cr.get_source().set_filter(cairo.FILTER_GOOD)
-            cr.paint()
+            PS.draw_page(ctx.get_cairo_context(), surf, pages[n])
         op.connect("draw-page", draw_page)
+        op.pages = pages
+        return op
+
+    def c_print(self):
+        self.finalize_pending()
+        op = self.print_operation()
         try:
             op.run(Gtk.PrintOperationAction.PRINT_DIALOG, self)
         except GLib.Error as e:
             D.message(self, "Printing failed", str(e), Gtk.MessageType.ERROR)
+
+    def c_page_setup(self):
+        self.finalize_pending()
+        from . import pagesetup as PS
+        PS.page_setup_dialog(self)
 
     def c_wallpaper(self):
         self.finalize_pending()

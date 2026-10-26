@@ -513,6 +513,54 @@ win.ribbon.sample_item.set_active(False)
 pump(0.05)
 check("and off again", not win.state.sample_all and win.doc.clip_extract()[2][0:4] == bytes(4))
 
+# ---- page setup and print preview
+from folio_draw import pagesetup as PS  # noqa: E402
+s = dict(PS.DEFAULTS)
+pg = PS.layout(s, 800, 600)
+check("fit to 1 page: one page, shrunk to fit", len(pg) == 1 and pg[0][6] <= PS.MM_PER_PX, pg)
+check("centred across the page", abs(pg[0][4] - (19.1 + (210 - 38.2 - 800 * pg[0][6]) / 2)) < 0.01, pg[0])
+pg = PS.layout(dict(s, mode="fit"), 100, 100)
+check("a small picture isn't enlarged by Fit", abs(pg[0][6] - PS.MM_PER_PX) < 1e-9)
+pg = PS.layout(dict(s, mode="percent", percent=100), 3000, 1000)
+check("100% of a big picture spreads over pages", len(pg) == 5 * 2, len(pg))
+check("which together cover it", abs(sum(p[2] for p in pg if p[1] == 0) - 3000) < 1e-6)
+pg = PS.layout(dict(s, mode="percent", percent=200), 100, 100)
+check("Adjust to 200% doubles it", abs(pg[0][6] - 2 * PS.MM_PER_PX) < 1e-9)
+check("landscape turns the paper", PS.paper_size(dict(s, landscape=True)) == (297, 210))
+pg = PS.layout(dict(s, mode="fit", fit_w=2, fit_h=1), 4000, 500)
+check("Fit to 2 by 1 pages", len(pg) == 2, len(pg))
+win.set_document(E.Document.new(1200, 300, (255, 255, 255, 255)), None)
+pump(0.05)
+
+
+def setup_dlg(d):
+    named(d, Gtk.RadioButton, "landscape").set_active(True)
+    named(d, Gtk.RadioButton, "adjust-to").set_active(True)
+    named(d, Gtk.SpinButton, "percent").set_value(150)
+    pump(0.05)
+    check("the preview counts the pages", named(d, Gtk.Label, "page-count").get_text().startswith("Page 1 of "))
+    return OK
+
+
+SCRIPT.append(setup_dlg)
+win.cmd("page_setup")
+st = PS.settings(win.state)
+check("Page setup keeps its settings", st["landscape"] and st["mode"] == "percent" and st["percent"] == 150, st)
+op = win.print_operation()
+check("printing uses them", len(op.pages) == len(PS.layout(st, 1200, 300)) and
+      op.get_default_page_setup().get_orientation() == Gtk.PageOrientation.LANDSCAPE)
+
+
+def setup_cancel(d):
+    named(d, Gtk.RadioButton, "fit-to").set_active(True)
+    return CANCEL
+
+
+SCRIPT.append(setup_cancel)
+win.cmd("page_setup")
+check("Cancel keeps the old settings", PS.settings(win.state)["mode"] == "percent")
+win.state.page = dict(PS.DEFAULTS)
+
 print()
 print("dialogs seen:", SEEN)
 print("ERRORS IN CALLBACKS: %d" % len(ERRORS))
