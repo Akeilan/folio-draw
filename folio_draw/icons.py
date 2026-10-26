@@ -764,6 +764,95 @@ def i_frames(cr, ink, acc):
     cr.fill()
 
 
+
+def i_adjust(cr, ink, acc):
+    # three sliders
+    cr.set_line_width(1.6)
+    cr.set_source_rgb(*ink)
+    for y in (6, 12, 18):
+        cr.move_to(3, y)
+        cr.line_to(21, y)
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    for x, y in ((8, 6), (15, 12), (10, 18)):
+        cr.rectangle(x - 2, y - 3, 4, 6)
+    cr.fill()
+
+
+def i_brightness(cr, ink, acc):
+    cr.set_source_rgb(*acc)
+    cr.arc(12, 12, 4.5, 0, math.tau)
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1.6)
+    for k in range(8):
+        a = k * math.tau / 8
+        cr.move_to(12 + 7 * math.cos(a), 12 + 7 * math.sin(a))
+        cr.line_to(12 + 10 * math.cos(a), 12 + 10 * math.sin(a))
+    cr.stroke()
+
+
+def i_huesat(cr, ink, acc):
+    cols = [(0.86, 0.2, 0.2), (0.92, 0.7, 0.15), (0.3, 0.7, 0.3), (0.2, 0.55, 0.85), (0.55, 0.3, 0.75), (0.85, 0.3, 0.6)]
+    for k, c in enumerate(cols):
+        cr.set_source_rgb(*c)
+        cr.move_to(12, 12)
+        cr.arc(12, 12, 9, k * math.tau / 6 - math.pi / 2, (k + 1) * math.tau / 6 - math.pi / 2)
+        cr.close_path()
+        cr.fill()
+    cr.set_source_rgb(1, 1, 1)
+    cr.arc(12, 12, 3.5, 0, math.tau)
+    cr.fill()
+
+
+def i_grey(cr, ink, acc):
+    for k in range(4):
+        v = 0.15 + k * 0.25
+        cr.set_source_rgb(v, v, v)
+        cr.rectangle(3 + k * 4.5, 4, 4.5, 16)
+        cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1)
+    cr.rectangle(3.5, 4.5, 17, 15)
+    cr.stroke()
+
+
+def i_blur(cr, ink, acc):
+    for r, a in ((9, 0.15), (7, 0.3), (5, 0.55), (3, 1.0)):
+        cr.set_source_rgba(acc[0], acc[1], acc[2], a)
+        cr.arc(12, 12, r, 0, math.tau)
+        cr.fill()
+
+
+def i_sharpen(cr, ink, acc):
+    cr.set_source_rgb(*acc)
+    cr.move_to(12, 3)
+    cr.line_to(20, 20)
+    cr.line_to(4, 20)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1.4)
+    cr.move_to(12, 3)
+    cr.line_to(20, 20)
+    cr.line_to(4, 20)
+    cr.close_path()
+    cr.stroke()
+
+
+def i_sepia(cr, ink, acc):
+    cr.set_source_rgb(0.55, 0.38, 0.2)
+    cr.rectangle(3, 4, 18, 16)
+    cr.fill()
+    cr.set_source_rgb(0.85, 0.72, 0.5)
+    cr.move_to(3, 20)
+    cr.line_to(9, 11)
+    cr.line_to(13, 16)
+    cr.line_to(16, 13)
+    cr.line_to(21, 20)
+    cr.close_path()
+    cr.fill()
+
 ICONS = {k[2:]: v for k, v in globals().items() if k.startswith("i_") and callable(v)}
 
 

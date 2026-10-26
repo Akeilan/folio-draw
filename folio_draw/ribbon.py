@@ -322,6 +322,7 @@ class Ribbon(Gtk.Box):
         kt("home", self.crop_btn, "CR")
         kt("home", self.resize_btn, "RE")
         kt("home", self.rotate_btn, "RO")
+        kt("home", self.adjust_btn, "J")
         for tool, tip in (("pencil", "P"), ("fill", "F"), ("text", "T"), ("eraser", "E"), ("picker", "K"), ("zoom", "M")):
             kt("home", self.tool_buttons[tool], tip, pick=True)
         kt("home", self.brush_btn, "B")
@@ -438,6 +439,20 @@ class Ribbon(Gtk.Box):
         for b in (self.crop_btn, resize, rotate):
             col.pack_start(b, False, False, 0)
         img.pack_start(col, False, False, 0)
+        adj_menu = make_menu([
+            ("Brightness and contrast…", "brightness", lambda: w.cmd("adjust", "brightness")),
+            ("Hue and saturation…", "huesat", lambda: w.cmd("adjust", "huesat")),
+            None,
+            ("Greyscale", "grey", lambda: w.cmd("greyscale")),
+            ("Sepia", "sepia", lambda: w.cmd("sepia")),
+            ("Invert colors", "invert", lambda: w.cmd("invert_colors"), "Ctrl+Shift+I"),
+            None,
+            ("Blur…", "blur", lambda: w.cmd("adjust", "blur")),
+            ("Sharpen…", "sharpen", lambda: w.cmd("adjust", "sharpen")),
+        ])
+        self.adjust_btn = big_button("adjust", "Adjust", "Adjust\nBrightness, contrast, colour, blur and sharpen "
+                                     "(the selection, or the whole layer).", menu=adj_menu)
+        img.pack_start(self.adjust_btn, False, False, 0)
         row.pack_start(group("Image", img), False, False, 2)
         row.pack_start(sep(), False, False, 0)
 
