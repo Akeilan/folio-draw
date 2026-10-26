@@ -1208,6 +1208,27 @@ impl Doc {
         self.mark_dirty(a, b, c, d);
     }
 
+    /// Rotate the floating selection by any angle (degrees, clockwise) about its centre.
+    pub fn float_rotate(&mut self, deg: f32, smooth: bool) {
+        let Some(mut f) = self.float.take() else { return };
+        let (a, b, c, d) = f.rect();
+        self.mark_dirty(a, b, c, d);
+        let (px, nw, nh) = rotate_px(&f.cur, f.w, f.h, deg, smooth, None);
+        let cx = f.x as f32 + f.w as f32 / 2.0;
+        let cy = f.y as f32 + f.h as f32 / 2.0;
+        f.src = px;
+        f.sw = nw;
+        f.sh = nh;
+        f.w = nw;
+        f.h = nh;
+        f.x = (cx - nw as f32 / 2.0).round() as i32;
+        f.y = (cy - nh as f32 / 2.0).round() as i32;
+        f.refresh();
+        let (a, b, c, d) = f.rect();
+        self.float = Some(f);
+        self.mark_dirty(a, b, c, d);
+    }
+
     /// Make pixels close to `key` transparent in the float ("transparent selection").
     pub fn float_color_key(&mut self, key: [u8; 4], tol: u8) {
         let Some(f) = self.float.as_mut() else { return };
@@ -2030,6 +2051,29 @@ impl Doc {
         self.resized();
     }
 
+    /// Rotate every layer by any angle (degrees, clockwise), growing the canvas to fit.
+    /// `bg` fills the uncovered corners of the bottom layer; None leaves them transparent.
+    pub fn image_rotate(&mut self, deg: f32, smooth: bool, bg: Option<[u8; 4]>) {
+        let n = deg.rem_euclid(360.0);
+        if n < 1e-3 || n > 360.0 - 1e-3 {
+            return;
+        }
+        self.commit_float();
+        self.finish_pending();
+        self.snapshot_full();
+        let (w, h) = (self.w, self.h);
+        let (mut nw, mut nh) = (w, h);
+        for (i, l) in self.layers.iter_mut().enumerate() {
+            let (px, a, b) = rotate_px(&l.px, w, h, deg, smooth, if i == 0 { bg } else { None });
+            l.px = px;
+            nw = a;
+            nh = b;
+        }
+        self.w = nw;
+        self.h = nh;
+        self.resized();
+    }
+
     pub fn image_resize(&mut self, nw: usize, nh: usize, smooth: bool) {
         if nw == 0 || nh == 0 || (nw == self.w && nh == self.h) {
             return;
@@ -2214,6 +2258,98 @@ pub fn crop_px(px: &[u8], w: usize, h: usize, x: i64, y: i64, nw: usize, nh: usi
     out
 }
 
+/// The size of a w x h image rotated by `deg`.
+pub fn rotated_size(w: usize, h: usize, deg: f32) -> (usize, usize) {
+    let n = deg.rem_euclid(360.0);
+    for (k, a) in [0.0f32, 90.0, 180.0, 270.0, 360.0].iter().enumerate() {
+        if (n - a).abs() < 1e-3 {
+            return if k % 2 == 1 { (h, w) } else { (w, h) };
+        }
+    }
+    let t = n.to_radians();
+    let (c, s) = (t.cos().abs(), t.sin().abs());
+    let nw = (w as f32 * c + h as f32 * s - 1e-3).ceil().max(1.0) as usize;
+    let nh = (w as f32 * s + h as f32 * c - 1e-3).ceil().max(1.0) as usize;
+    (nw, nh)
+}
+
+/// Rotate pixels by any angle (degrees, clockwise on screen) into the bounding box of the result.
+/// Quarter turns are exact; other angles sample bilinearly in premultiplied space (or nearest
+/// neighbour when `smooth` is off). Uncovered pixels are transparent, or `bg` when given.
+pub fn rotate_px(px: &[u8], w: usize, h: usize, deg: f32, smooth: bool, bg: Option<[u8; 4]>) -> (Vec<u8>, usize, usize) {
+    let n = deg.rem_euclid(360.0);
+    let quarter = [(0.0f32, 255u8), (90.0, 2), (180.0, 3), (270.0, 4), (360.0, 255)];
+    for (a, kind) in quarter {
+        if (n - a).abs() < 1e-3 {
+            return if kind == 255 { (px.to_vec(), w, h) } else { transform_px(px, w, h, kind) };
+        }
+    }
+    let (nw, nh) = rotated_size(w, h, n);
+    let t = n.to_radians();
+    let (c, s) = (t.cos(), t.sin());
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    let (ncx, ncy) = (nw as f32 / 2.0, nh as f32 / 2.0);
+    let get = |x: i64, y: i64| -> [f32; 4] {
+        if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+            return [0.0; 4];
+        }
+        let p = load(&px[(y as usize * w + x as usize) * 4..][..4]);
+        [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]
+    };
+    let bgf = bg.map(|b| load(&b));
+    let mut out = vec![0u8; nw * nh * 4];
+    for y in 0..nh {
+        let dy = y as f32 + 0.5 - ncy;
+        for x in 0..nw {
+            let dx = x as f32 + 0.5 - ncx;
+            // inverse rotation: destination -> source
+            let sx = c * dx + s * dy + cx;
+            let sy = -s * dx + c * dy + cy;
+            let m = if smooth {
+                let fx = sx - 0.5;
+                let fy = sy - 0.5;
+                let x0 = fx.floor();
+                let y0 = fy.floor();
+                let (tx, ty) = (fx - x0, fy - y0);
+                let (x0, y0) = (x0 as i64, y0 as i64);
+                let p00 = get(x0, y0);
+                let p10 = get(x0 + 1, y0);
+                let p01 = get(x0, y0 + 1);
+                let p11 = get(x0 + 1, y0 + 1);
+                let mut m = [0.0f32; 4];
+                for k in 0..4 {
+                    let top = p00[k] * (1.0 - tx) + p10[k] * tx;
+                    let bot = p01[k] * (1.0 - tx) + p11[k] * tx;
+                    m[k] = top * (1.0 - ty) + bot * ty;
+                }
+                m
+            } else {
+                get(sx.floor() as i64, sy.floor() as i64)
+            };
+            let o = (y * nw + x) * 4;
+            let mut col = if m[3] > 1e-6 { [m[0] / m[3], m[1] / m[3], m[2] / m[3], m[3]] } else { [0.0; 4] };
+            if let Some(b) = bgf {
+                // source-over onto the fill colour
+                let a = col[3];
+                let ba = b[3] * (1.0 - a);
+                let oa = a + ba;
+                if oa > 1e-6 {
+                    col = [
+                        (col[0] * a + b[0] * ba) / oa,
+                        (col[1] * a + b[1] * ba) / oa,
+                        (col[2] * a + b[2] * ba) / oa,
+                        oa,
+                    ];
+                }
+            }
+            if col[3] > 1e-6 {
+                store(&mut out[o..o + 4], col);
+            }
+        }
+    }
+    (out, nw, nh)
+}
+
 /// kind: 0 flip H, 1 flip V, 2 rotate 90 CW, 3 rotate 180, 4 rotate 90 CCW
 pub fn transform_px(px: &[u8], w: usize, h: usize, kind: u8) -> (Vec<u8>, usize, usize) {
     let (nw, nh) = if kind == 2 || kind == 4 { (h, w) } else { (w, h) };
@@ -2297,6 +2433,53 @@ mod tests {
         assert_eq!(d.layers[0].px[(5 * 40 + 5) * 4 + 3], 0);
         assert!(d.undo());
         assert_eq!(d.layers[0].px, base);
+    }
+
+    #[test]
+    fn rotate_any_angle() {
+        assert_eq!(rotated_size(100, 50, 90.0), (50, 100));
+        assert_eq!(rotated_size(100, 50, -90.0), (50, 100));
+        assert_eq!(rotated_size(100, 100, 45.0), (142, 142));
+        let mut d = Doc::new(40, 20, [255, 0, 0, 255]);
+        d.layer_add("Top");
+        d.image_rotate(30.0, true, Some([0, 0, 255, 255]));
+        let (w, h) = rotated_size(40, 20, 30.0);
+        assert_eq!((d.w, d.h), (w, h));
+        assert_eq!(d.layers[1].px.len(), w * h * 4);
+        // the middle is still red, the corner is the fill colour on the bottom layer
+        let mid = ((h / 2) * w + w / 2) * 4;
+        assert_eq!(&d.layers[0].px[mid..mid + 4], &[255, 0, 0, 255]);
+        assert_eq!(&d.layers[0].px[0..4], &[0, 0, 255, 255]);
+        assert_eq!(d.layers[1].px[3], 0);
+        assert!(d.undo());
+        assert_eq!((d.w, d.h), (40, 20));
+        // -90 is exact and lossless, and 360 changes nothing
+        let mut e = Doc::new(30, 10, [1, 2, 3, 255]);
+        e.layers[0].px[0..4].copy_from_slice(&[9, 9, 9, 255]);
+        e.image_rotate(-90.0, true, None);
+        assert_eq!((e.w, e.h), (10, 30));
+        assert_eq!(&e.layers[0].px[(29 * 10) * 4..(29 * 10) * 4 + 4], &[9, 9, 9, 255]);
+        e.image_rotate(360.0, true, None);
+        assert_eq!((e.w, e.h), (10, 30));
+        // nearest neighbour keeps only colours from the source
+        let (px, _, _) = rotate_px(&vec![200u8; 16 * 16 * 4], 16, 16, 17.0, false, None);
+        assert!(px.chunks_exact(4).all(|p| p == [0, 0, 0, 0] || p == [200, 200, 200, 200]));
+    }
+
+    #[test]
+    fn rotate_float() {
+        let mut d = Doc::new(60, 60, [255, 255, 255, 255]);
+        d.sel_rect(10, 10, 20, 10);
+        assert!(d.float_lift(true));
+        d.float_rotate(90.0, true);
+        let f = d.float.as_ref().unwrap();
+        assert_eq!((f.w, f.h), (10, 20));
+        assert_eq!((f.x, f.y), (15, 5));
+        d.float_rotate(45.0, true);
+        let f = d.float.as_ref().unwrap();
+        assert_eq!((f.w, f.h), rotated_size(10, 20, 45.0));
+        d.commit_float();
+        assert!(d.float.is_none());
     }
 
     #[test]

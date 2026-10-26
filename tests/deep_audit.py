@@ -62,6 +62,7 @@ D.image_properties = lambda *a, **k: answers.get("props")
 D.layer_properties = lambda *a, **k: answers.get("layerprops")
 D.edit_colors = lambda parent, color, custom: answers.get("colors")
 D.about = lambda *a, **k: None
+D.rotate_angle = lambda *a, **k: answers.get("rotate")
 
 _popup = Gtk.Menu.popup_at_pointer
 Gtk.Menu.popup_at_pointer = lambda self, ev=None: None  # fake events are not Gdk.Events
@@ -351,6 +352,19 @@ drag([(10, 10), (110, 110)])
 answers["resize"] = (300, 50, 0, 0, True)
 undoable("resize a selection", lambda: win.cmd("resize"), expect_change=None)
 answers["resize"] = None
+win.cmd("select_all")
+win.doc.sel_none()
+win.set_tool("pencil")
+answers["rotate"] = (33.0, True, True)
+undoable("rotate the image 33°", lambda: win.cmd("rotate_angle"))
+answers["rotate"] = (-137.5, False, False)
+undoable("rotate the image -137.5° without smoothing", lambda: win.cmd("rotate_angle"))
+win.set_tool("select")
+answers["rotate"] = (12.0, True, False)
+undoable("rotate a selection 12°", lambda: (drag([(20, 20), (120, 90)]), win.cmd("rotate_angle")), expect_change=None)
+answers["rotate"] = None
+undoable("rotate: cancel", lambda: win.cmd("rotate_angle"), expect_change=None)
+win.set_tool("pencil")
 
 # ---- tiny document: every command must survive a 1x1 image
 fresh(1, 1)
@@ -362,9 +376,11 @@ for tool in ("pencil", "brush", "eraser", "fill", "select", "freeselect", "shape
     settle()
 for c in ("rot_cw", "rot_ccw", "rot_180", "flip_h", "flip_v", "invert_colors", "select_all", "invert_selection", "crop",
           "copy", "delete", "zoom_in", "zoom_out", "zoom_fit", "zoom_100", "layer_add", "layer_dup", "layer_up", "layer_down",
-          "layer_merge", "flatten", "layer_delete", "undo", "redo"):
+          "layer_merge", "flatten", "layer_delete", "undo", "redo", "rotate_angle"):
+    answers["rotate"] = (45.0, True, True)
     win.cmd(c)
     settle()
+answers["rotate"] = None
 check("every tool and command on a 1x1 image without errors", not ERRORS, ERRORS[-1:] and ERRORS[-1].splitlines()[-1])
 
 # ---- extreme zoom: drawing must land on the right pixels
@@ -487,7 +503,7 @@ def fuzz(seed, steps=int(os.environ.get("FUZZ_STEPS", "250"))):
     tools = ["pencil", "eraser", "fill", "select", "freeselect", "shape", "picker", "brush"]
     cmds = ["rot_cw", "rot_ccw", "rot_180", "flip_h", "flip_v", "invert_colors", "select_all", "invert_selection",
             "delete", "crop", "layer_add", "layer_dup", "layer_up", "layer_down", "layer_merge", "flatten", "layer_delete",
-            "copy", "paste", "cut", "zoom_in", "zoom_out", "zoom_fit", "zoom_100"]
+            "copy", "paste", "cut", "zoom_in", "zoom_out", "zoom_fit", "zoom_100", "rotate_angle"]
     log = []
     for i in range(steps):
         r = rnd.random()
@@ -508,6 +524,10 @@ def fuzz(seed, steps=int(os.environ.get("FUZZ_STEPS", "250"))):
             c = rnd.choice(cmds)
             if c == "crop" and win.doc.width * win.doc.height < 64:
                 continue
+            if c == "rotate_angle":
+                if win.doc.width * win.doc.height > 400000:
+                    continue
+                answers["rotate"] = (rnd.uniform(-360, 360), rnd.random() < 0.7, rnd.random() < 0.5)
             win.cmd(c)
             log.append(c)
         elif r < 0.92:

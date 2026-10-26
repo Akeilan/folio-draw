@@ -1,6 +1,7 @@
-"""Dialogs: Resize and Skew, Image Properties, Edit Colors, Layer Properties, prompts, About."""
+"""Dialogs: Resize and Skew, Rotate, Image Properties, Edit Colors, Layer Properties, prompts, About."""
 
 import colorsys
+import math
 import os
 import time
 
@@ -127,6 +128,109 @@ def resize_skew(parent, cur_w, cur_h, what="image"):
             message(parent, "That size is too large", "Images can be at most 32,768 pixels on each side.")
         else:
             out = (w, h, sx.get_value(), sy.get_value(), smooth.get_active())
+    d.destroy()
+    return out
+
+
+# --------------------------------------------------------------------------- Rotate by any angle
+
+def rotate_angle(parent, surf, src_rect, what="image", fill_default=True, last=None):
+    """Rotate by an angle of the person's choice, with a live preview.
+    surf: the composite cairo surface; src_rect: (x, y, w, h) of what turns.
+    Returns (degrees clockwise, smooth, fill corners) or None."""
+    d, area = _dialog(parent, "Rotate")
+    if last is None:
+        last = {}
+    g = Gtk.Grid(row_spacing=6, column_spacing=10)
+    angle = _spin(0, 360, last.get("angle", 15), digits=1, step=1)
+    angle.set_name("angle")
+    g.attach(Icon("rotate", 20), 0, 0, 1, 1)
+    g.attach(Gtk.Label(label="Angle:", xalign=0), 1, 0, 1, 1)
+    g.attach(angle, 2, 0, 1, 1)
+    g.attach(Gtk.Label(label="degrees", xalign=0), 3, 0, 1, 1)
+    cw = Gtk.RadioButton.new_with_label(None, "Clockwise")
+    cw.set_name("cw")
+    ccw = Gtk.RadioButton.new_with_label_from_widget(cw, "Counter-clockwise")
+    ccw.set_name("ccw")
+    ccw.set_active(last.get("ccw", False))
+    dirs = Gtk.Box(spacing=12)
+    dirs.pack_start(cw, False, False, 0)
+    dirs.pack_start(ccw, False, False, 0)
+    g.attach(dirs, 1, 1, 3, 1)
+    smooth = Gtk.CheckButton(label="Smooth edges (uncheck for crisp pixel art)")
+    smooth.set_name("smooth")
+    smooth.set_active(last.get("smooth", True))
+    g.attach(smooth, 1, 2, 3, 1)
+    fill = Gtk.CheckButton(label="Fill the corners with the secondary color")
+    fill.set_name("fill")
+    fill.set_active(fill_default)
+    if what == "image":
+        g.attach(fill, 1, 3, 3, 1)
+    area.pack_start(_frame("Rotate the " + what, g), False, False, 0)
+    pv = Gtk.DrawingArea()
+    pv.set_size_request(220, 170)
+    size = Gtk.Label(xalign=0)
+    size.set_name("size")
+    pbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    pbox.pack_start(pv, False, False, 0)
+    pbox.pack_start(size, False, False, 0)
+    area.pack_start(_frame("Preview", pbox), False, False, 0)
+    sx, sy, sw, sh = src_rect
+    fill_rgb = getattr(getattr(parent, "state", None), "color2", (255, 255, 255, 255))
+
+    def degrees():
+        a = angle.get_value()
+        return -a if ccw.get_active() else a
+
+    def draw(w, cr):
+        W, H = w.get_allocated_width(), w.get_allocated_height()
+        deg = degrees()
+        nw, nh = E.rotated_size(sw, sh, deg)
+        k = min((W - 12) / nw, (H - 12) / nh, 1.0)
+        checker(cr, 0, 0, W, H, 6)
+        cr.translate(W / 2, H / 2)
+        cr.scale(k, k)
+        if what == "image" and fill.get_active():
+            cr.rectangle(-nw / 2, -nh / 2, nw, nh)
+            cr.set_source_rgba(fill_rgb[0] / 255, fill_rgb[1] / 255, fill_rgb[2] / 255, fill_rgb[3] / 255)
+            cr.fill()
+        cr.save()
+        cr.rotate(math.radians(deg))
+        cr.rectangle(-sw / 2, -sh / 2, sw, sh)
+        cr.clip()
+        if surf is not None:
+            cr.set_source_surface(surf, -sw / 2 - sx, -sh / 2 - sy)
+            cr.paint()
+        cr.restore()
+        cr.rectangle(-nw / 2, -nh / 2, nw, nh)
+        cr.set_source_rgba(0.75, 0.6, 0.2, 0.9)
+        cr.set_line_width(1.5 / k)
+        cr.stroke()
+        return False
+
+    def changed(*_):
+        nw, nh = E.rotated_size(sw, sh, degrees())
+        size.set_text("New size: %d × %d pixels" % (nw, nh))
+        pv.queue_draw()
+
+    pv.connect("draw", draw)
+    for wdg, sig in ((angle, "value-changed"), (cw, "toggled"), (fill, "toggled")):
+        wdg.connect(sig, changed)
+    changed()
+    d.show_all()
+    out = None
+    while True:
+        r = d.run()
+        if r != Gtk.ResponseType.OK:
+            break
+        _commit_spins(angle)
+        nw, nh = E.rotated_size(sw, sh, degrees())
+        if what == "image" and (nw > 32768 or nh > 32768):
+            message(parent, "That size is too large", "Images can be at most 32,768 pixels on each side.")
+            continue
+        last.update(angle=angle.get_value(), ccw=ccw.get_active(), smooth=smooth.get_active())
+        out = (degrees(), smooth.get_active(), what == "image" and fill.get_active())
+        break
     d.destroy()
     return out
 

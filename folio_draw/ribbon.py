@@ -384,6 +384,7 @@ class Ribbon(Gtk.Box):
             ("Rotate right 90°", "rotate", lambda: w.cmd("rot_cw")),
             ("Rotate left 90°", "rot_left", lambda: w.cmd("rot_ccw")),
             ("Rotate 180°", "rot180", lambda: w.cmd("rot_180")),
+            ("Rotate by angle…", "rotate", lambda: w.cmd("rotate_angle"), "Ctrl+Shift+R"),
             None,
             ("Flip vertical", "flip_v", lambda: w.cmd("flip_v")),
             ("Flip horizontal", "flip_h", lambda: w.cmd("flip_h")),

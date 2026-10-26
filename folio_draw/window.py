@@ -649,6 +649,7 @@ class Window(Gtk.ApplicationWindow):
             None,
             ("Crop", "crop", lambda: self.cmd("crop"), "Ctrl+Shift+X"),
             ("Rotate right 90°", "rotate", lambda: self.cmd("rot_cw")),
+            ("Rotate by angle…", "rotate", lambda: self.cmd("rotate_angle"), "Ctrl+Shift+R"),
             ("Flip horizontal", "flip_h", lambda: self.cmd("flip_h")),
             ("Flip vertical", "flip_v", lambda: self.cmd("flip_v")),
             ("Resize…", "resize", lambda: self.cmd("resize"), "Ctrl+W"),
@@ -880,6 +881,37 @@ class Window(Gtk.ApplicationWindow):
 
     def c_rot_180(self):
         self._transform(E.ROT_180)
+
+    def c_rotate_angle(self):
+        """Rotate the selection, or the whole image when nothing is selected, by any angle."""
+        self.finalize_pending()
+        doc = self.doc
+        fr = doc.float_rect()
+        sb = doc.sel_bounds()
+        if fr:
+            what, rect = "selection", fr
+        elif sb:
+            what = "selection"
+            rect = (sb[0], sb[1], sb[2] - sb[0], sb[3] - sb[1])
+        else:
+            what, rect = "image", (0, 0, doc.width, doc.height)
+        if not hasattr(self, "_rotate_last"):
+            self._rotate_last = {}
+        # Paint-style: an opaque picture gets its corners filled; a transparent one stays transparent
+        bottom_opaque = what == "image" and min(doc.layer_rgba(0)[3::4]) == 255
+        r = D.rotate_angle(self, self.canvas.surf, rect, what, bottom_opaque, self._rotate_last)
+        if not r:
+            return
+        deg, smooth, fill = r
+        if what == "selection":
+            if not fr:
+                self.canvas._lift(True)
+            doc.float_rotate(deg, smooth)
+        else:
+            doc.image_rotate(deg, smooth, self.state.color2 if fill else None)
+            self.canvas.sel_path = None
+        self.canvas.sync(full=True)
+        self.after_edit()
 
     def c_flip_h(self):
         self._transform(E.FLIP_H)
@@ -1271,7 +1303,7 @@ class Window(Gtk.ApplicationWindow):
             table = {
                 "n": ("layer_add",) if shift else ("new",), "o": ("open",), "s": ("save_as",) if shift else ("save",),
                 "p": ("print",), "z": ("undo",), "y": ("redo",), "a": ("select_all",), "c": ("copy",), "x": ("crop",) if shift else ("cut",),
-                "v": ("paste_layer",) if shift else ("paste",), "e": ("properties",), "w": ("resize",), "r": ("view_toggle", "rulers"),
+                "v": ("paste_layer",) if shift else ("paste",), "e": ("properties",), "w": ("resize",), "r": ("rotate_angle",) if shift else ("view_toggle", "rulers"),
                 "g": ("view_toggle", "grid"), "i": ("invert_colors",) if shift else None, "m": ("layer_merge",),
                 "d": ("layer_dup",) if shift else None, "page_up": ("zoom_in",), "page_down": ("zoom_out",),
                 "plus": ("size_step", 1), "equal": ("size_step", 1), "kp_add": ("size_step", 1),
