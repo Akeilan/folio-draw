@@ -66,6 +66,9 @@ _sig("fd_pick", c_uint, _P, c_int, c_int, c_int)
 _sig("fd_invert_colors", None, _P)
 _sig("fd_adjust_preview", None, _P, c_uint, c_float, c_float, c_float)
 _sig("fd_set_sample_all", None, _P, c_int)
+_sig("fd_layer_text", c_uint, _P, c_uint, c_char_p, c_uint)
+_sig("fd_text_layer_add", c_uint, _P, c_char_p, c_char_p, c_int, c_int, c_uint, c_uint, c_char_p, c_uint)
+_sig("fd_text_layer_set", None, _P, c_uint, c_char_p, c_int, c_int, c_uint, c_uint, c_char_p, c_uint)
 _sig("fd_adjust_end", None, _P)
 _sig("fd_adjust_cancel", None, _P)
 _sig("fd_sel_rect", None, _P, c_int, c_int, c_int, c_int)
@@ -385,6 +388,28 @@ class Document:
         buf = ctypes.create_string_buffer(n + 1)
         L.fd_layer_name(self.h, i, buf, n + 1)
         return buf.value.decode("utf-8", "replace")
+
+    def layer_text(self, i):
+        """A text layer's description (JSON text), or "" for an ordinary layer."""
+        n = L.fd_layer_text(self.h, i, None, 0)
+        if not n:
+            return ""
+        buf = ctypes.create_string_buffer(n + 1)
+        L.fd_layer_text(self.h, i, buf, n + 1)
+        return buf.value.decode("utf-8", "replace")
+
+    def text_layer_add(self, name, spec, x, y, w, h, data, stride):
+        """A new text layer above the active one from a cairo ARGB32 block (one undo step)."""
+        return L.fd_text_layer_add(self.h, name.encode(), spec.encode(), int(x), int(y), w, h, bytes(data), stride)
+
+    def text_layer_set(self, i, spec, block=None):
+        """Type a text layer again (block: x, y, w, h, data, stride); spec "" and no block
+        turns it into an ordinary layer."""
+        if block is None:
+            L.fd_text_layer_set(self.h, i, spec.encode(), 0, 0, 0, 0, None, 0)
+        else:
+            x, y, w, h, data, stride = block
+            L.fd_text_layer_set(self.h, i, spec.encode(), int(x), int(y), w, h, bytes(data), stride)
 
     def layer_props(self, i):
         out = (c_float * 5)()

@@ -368,4 +368,42 @@ mod tests {
         assert_eq!(&d.layers[top].px[0..4], &[255, 0, 0, 255]);
         assert_eq!(&d.layers[top].px[60..64], &[0, 0, 255, 255]);
     }
+
+    #[test]
+    fn text_layers() {
+        let mut d = Doc::new(10, 10, [255, 255, 255, 255]);
+        // a 2x1 block of opaque red (premultiplied BGRA) at 3, 4
+        let block = [0u8, 0, 255, 255, 0, 0, 255, 255];
+        let i = d.text_layer_add("Text", "{\"t\": \"Hi\"}", 3, 4, 2, 1, &block, 8);
+        assert_eq!(d.layers.len(), 2);
+        assert_eq!(d.layers[i].text, "{\"t\": \"Hi\"}");
+        assert_eq!(&d.layers[i].px[(4 * 10 + 3) * 4..(4 * 10 + 3) * 4 + 4], &[255, 0, 0, 255]);
+        // typed again: new pixels, the old ones gone
+        let blue = [255u8, 0, 0, 255];
+        d.text_layer_set(i, "{\"t\": \"Ho\"}", Some((0, 0, 1, 1, &blue, 4)));
+        assert_eq!(&d.layers[i].px[0..4], &[0, 0, 255, 255]);
+        assert_eq!(d.layers[i].px[(4 * 10 + 3) * 4 + 3], 0);
+        d.undo();
+        assert_eq!(d.layers[i].text, "{\"t\": \"Hi\"}");
+        assert_eq!(d.layers[i].px[3], 0);
+        d.redo();
+        assert_eq!(d.layers[i].text, "{\"t\": \"Ho\"}");
+        // painting on it makes it pixels, and undo makes it text again
+        d.set_active(i);
+        d.invert_colors();
+        assert!(d.layers[i].text.is_empty());
+        d.undo();
+        d.undo();
+        assert_eq!(d.layers[i].text, "{\"t\": \"Ho\"}");
+        // one undo takes a new text layer away
+        d.undo();
+        d.undo();
+        assert_eq!(d.layers.len(), 1);
+        // kept in OpenRaster files
+        let mut e = Doc::new(4, 4, [255, 255, 255, 255]);
+        e.text_layer_add("Text", "line1\nline2 \"q\" & <x>", 0, 0, 1, 1, &blue, 4);
+        let bytes = crate::ora::save(&e);
+        let back = crate::ora::load(&bytes).unwrap();
+        assert_eq!(back.layers[1].text, "line1\nline2 \"q\" & <x>");
+    }
 }

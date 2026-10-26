@@ -56,6 +56,8 @@ class LayerRow(Gtk.ListBoxRow):
             bits.append(E.BLEND_NAMES[p["blend"]])
         if p["delay"] > 0:
             bits.append("%d ms" % p["delay"])
+        if doc.layer_text(self.index):
+            bits.insert(0, "Text")      # typed again with the Text tool
         self.info.set_text(" · ".join(bits) if bits else "")
         self.eye_icon.set_name_icon("eye" if p["visible"] else "eyeoff")
         self.name.set_opacity(1.0 if p["visible"] else 0.55)

@@ -1,5 +1,6 @@
 """The drawing surface: viewport, rulers, overlays and every tool's mouse handling."""
 
+import json
 import math
 
 import cairo
@@ -879,6 +880,11 @@ class Canvas(Gtk.Grid):
             self.zoom_step(1 if ev.button == 1 else -1, (wx, wy))
         elif tool == "text":
             if ev.button == 1:
+                hit = self.text_layer_at(x, y)
+                if hit is not None and self.text is None:
+                    # a text layer: typed again where it is
+                    self.text_edit_layer(*hit)
+                    return True
                 self.drag = {"kind": "textnew", "start": (x, y)}
                 self.marquee = ("rect", x, y, x, y)
         elif tool == "shape":
@@ -1384,9 +1390,63 @@ class Canvas(Gtk.Grid):
             return
         self.text = None
         t["view"].destroy()
+        self._text_layer_shown(t)
+        self.sync()
         self.win.on_text_mode(False)
         self.area.queue_draw()
         self.area.grab_focus()
+
+    TEXT_KEYS = ("font_family", "font_size", "bold", "italic", "underline", "strike", "text_opaque")
+
+    def text_spec(self, txt, x, y, w, h):
+        """What a text layer keeps so it can be typed again."""
+        d = {"text": txt, "x": x, "y": y, "w": w, "h": h, "color1": list(self.st.color1), "color2": list(self.st.color2)}
+        for k in self.TEXT_KEYS:
+            d[k] = getattr(self.st, k)
+        return json.dumps(d)
+
+    def text_layer_at(self, x, y):
+        """The topmost visible text layer whose box holds the point: (index, description) or None."""
+        doc = self.doc
+        for i in range(doc.layer_count() - 1, -1, -1):
+            raw = doc.layer_text(i)
+            if not raw or not doc.layer_props(i)["visible"]:
+                continue
+            try:
+                s = json.loads(raw)
+            except ValueError:
+                continue
+            if s["x"] <= x < s["x"] + s["w"] and s["y"] <= y < s["y"] + s["h"]:
+                return i, s
+        return None
+
+    def text_edit_layer(self, i, s):
+        """Open a text layer for typing again: its settings come back, its pixels hide meanwhile."""
+        self.text_commit()
+        doc = self.doc
+        if doc.active != i:
+            doc.set_active(i)
+        for k in self.TEXT_KEYS:
+            if k in s:
+                setattr(self.st, k, s[k])
+        self.st.color1 = tuple(s.get("color1", self.st.color1))
+        self.st.color2 = tuple(s.get("color2", self.st.color2))
+        doc.layer_set(i, visible=False, record=False)
+        self.sync()
+        self.text_begin(s["x"], s["y"], s["w"], s["h"])
+        self.text["layer"] = i
+        buf = self.text["view"].get_buffer()
+        buf.set_text(s.get("text", ""))
+        self.text["history"] = [s.get("text", "")]
+        self.text["hpos"] = 0
+        self.text_style_changed()
+        self.win.ribbon.refresh()
+        self.win.refresh_state()
+
+    def _text_layer_shown(self, t):
+        i = t.get("layer")
+        if i is not None and i < self.doc.layer_count():
+            self.doc.layer_set(i, visible=True, record=False)
 
     def text_commit(self):
         t = self.text
@@ -1397,8 +1457,24 @@ class Canvas(Gtk.Grid):
         self.text = None
         t["view"].destroy()
         self.win.on_text_mode(False)
-        if txt.strip() or (self.st.text_opaque and txt):
-            self.render_text_to_layer(txt, t["x"], t["y"], t["w"], t["h"])
+        self._text_layer_shown(t)
+        keep = txt.strip() or (self.st.text_opaque and txt)
+        i = t.get("layer")
+        if keep:
+            block = self.render_text_block(txt, t["w"], t["h"])
+            spec = self.text_spec(txt, t["x"], t["y"], t["w"], t["h"])
+            if i is not None:
+                self.doc.text_layer_set(i, spec, (t["x"], t["y"]) + block)
+            else:
+                self.doc.text_layer_add("Text", spec, t["x"], t["y"], *block)
+            self.sync()
+            self.win.after_edit()
+        elif i is not None:
+            # emptied: the text layer goes
+            self.doc.set_active(i)
+            self.doc.layer_delete()
+            self.sync()
+            self.win.after_edit()
         self.area.grab_focus()
         self.area.queue_draw()
 
@@ -1424,7 +1500,8 @@ class Canvas(Gtk.Grid):
         layout.set_text(txt, -1)
         return layout
 
-    def render_text_to_layer(self, txt, x, y, w, h):
+    def render_text_block(self, txt, w, h):
+        """The text as cairo ARGB32: (w, h, data, stride)."""
         from gi.repository import PangoCairo
         st = self.st
         surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, max(1, w), max(1, h))
@@ -1446,6 +1523,11 @@ class Canvas(Gtk.Grid):
         PangoCairo.show_layout(cr, layout)
         surf.flush()
         data = bytes(surf.get_data())
-        self.doc.blit_premul(x, y, surf.get_width(), surf.get_height(), data, surf.get_stride())
+        return (surf.get_width(), surf.get_height(), data, surf.get_stride())
+
+    def render_text_to_layer(self, txt, x, y, w, h):
+        """The text painted into the active layer's pixels."""
+        w2, h2, data, stride = self.render_text_block(txt, w, h)
+        self.doc.blit_premul(x, y, w2, h2, data, stride)
         self.sync()
         self.win.after_edit()
