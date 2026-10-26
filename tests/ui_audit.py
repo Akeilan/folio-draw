@@ -29,6 +29,7 @@ sys.excepthook = hook
 from folio_draw import dialogs as D  # noqa: E402
 from folio_draw import engine as E  # noqa: E402
 from shot import make, pump, shot  # noqa: E402
+from folio_draw.window import SEARCH_COMMANDS as SEARCH  # noqa: E402
 
 OUT = os.environ.get("AUDIT_OUT", tempfile.mkdtemp(prefix="fd-audit-"))
 os.makedirs(OUT, exist_ok=True)
@@ -470,14 +471,96 @@ win.set_tool("pencil")
 # menus: activate every item in the File menu and dropdown menus (dialogs are canned)
 answers["resize"] = None
 answers["props"] = None
-win.build_file_menu(win.ribbon.file_menu)
-for it in win.ribbon.file_menu.get_children():
-    lbl = getattr(it, "item_label", "")
-    if lbl in ("Exit", "Print…", "Open…", "Save", "Set as desktop background") or isinstance(it, Gtk.SeparatorMenuItem) or it.get_submenu():
-        continue
-    it.activate()
-    pump(0.02)
-check("File menu items run", True)
+# ---- File view (the suite's full-window File page instead of a menu)
+win.show_backstage()
+pump(0.05)
+check("File opens the File view", win.backstage_open() and win.body.get_visible_child_name() == "backstage")
+for page in ("home", "new", "open", "info", "saveas", "print", "export", "about"):
+    win.backstage.nav(page)
+    pump(0.03)
+    check("File view page %s" % page, win.backstage.stack.get_visible_child_name() == page and not ERRORS)
+shot(win, os.path.join(OUT, "backstage.png"))
+
+
+def find_named(w, name):
+    if w.get_name() == name:
+        return w
+    if isinstance(w, Gtk.Container):
+        for c in w.get_children():
+            r = find_named(c, name)
+            if r is not None:
+                return r
+    return None
+
+
+win.backstage.nav("new")
+pump(0.02)
+tile = find_named(win.backstage, "tile-transparent")
+check("New page has a transparent picture tile", tile is not None)
+if tile is not None:
+    tile.clicked()
+    pump(0.05)
+check("the tile makes a transparent picture and leaves the File view", not win.backstage_open() and win.doc.has_transparency())
+win.show_backstage("info")
+pump(0.02)
+info = find_named(win.backstage, "info")
+labels = [c.get_text() for c in info.get_children() if isinstance(c, Gtk.Label)] if info else []
+check("Info shows the picture size", any("pixels" in t for t in labels), labels)
+key("Escape")
+check("Esc leaves the File view", not win.backstage_open())
+win.cmd("new")
+
+# ---- KeyTips: tap Alt, type a tab letter, then a control's letters
+win._key(win, FakeKey(Gdk.KEY_Alt_L, 0))
+win._key_release(win, FakeKey(Gdk.KEY_Alt_L, 0))
+pump(0.05)
+tips = win.keytips.tips()
+check("Alt shows KeyTips on the tabs, Quick Access and search", win.keytips.active and {"F", "H", "W", "1", "2", "3", "Q"} <= set(tips), tips)
+key("h")
+pump(0.1)
+tips = win.keytips.tips()
+check("H shows the Home tab's KeyTips", "P" in tips and "SE" in tips and "EC" in tips, tips)
+key("e")
+pump(0.1)
+check("E picks the eraser", win.state.tool == "eraser" and not win.keytips.active, win.state.tool)
+win.keytips.start()
+key("w")
+pump(0.1)
+check("W opens View with its KeyTips", win.ribbon.stack.get_visible_child_name() == "view" and "R" in win.keytips.tips(), win.keytips.tips())
+key("Escape")
+check("Esc steps back to the tab letters", win.keytips.active and win.keytips.level == 1)
+key("Escape")
+check("a second Esc leaves KeyTips", not win.keytips.active)
+key("f", Gdk.ModifierType.MOD1_MASK)
+pump(0.05)
+check("Alt+F opens the File view", win.backstage_open())
+key("Escape")
+key("h", Gdk.ModifierType.MOD1_MASK)
+pump(0.05)
+check("Alt+H goes to Home with its KeyTips", win.ribbon.stack.get_visible_child_name() == "home" and win.keytips.active)
+key("Escape")
+key("Escape")
+win.set_tool("pencil")
+
+# ---- search (Alt+Q)
+key("q", Gdk.ModifierType.MOD1_MASK)
+check("Alt+Q goes to the search box", win.get_focus() is win.search)
+m = win.search_matches("flip h")
+check("search finds commands", m and SEARCH[m[0]][0] == "Flip horizontal", [SEARCH[i][0] for i in m])
+n0 = win.doc.changes
+win.run_search(m[0])
+pump(0.02)
+check("running a found command does it", win.doc.changes != n0)
+win.run_search(win.search_matches("eraser")[0])
+check("search also picks tools", win.state.tool == "eraser")
+win.set_tool("pencil")
+
+# ---- Quick Access Toolbar
+check("Quick Access starts with Save, Undo, Redo", win.qat_order() == ["save", "undo", "redo"], win.qat_order())
+win.set_qat("print", True)
+check("Quick Access can add Print", win.qa_buttons["print"].get_visible() and win.qat_order()[-1] == "print")
+win.set_qat("print", False)
+check("and remove it", not win.qa_buttons["print"].get_visible())
 
 # ---- save/load every format, layers preserved in .ora
 win.new_document()
