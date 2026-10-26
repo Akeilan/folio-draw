@@ -25,6 +25,9 @@ L = _lib
 _P = c_void_p
 
 
+ADJ_BRIGHT_CONTRAST, ADJ_HUE_SAT, ADJ_GREY, ADJ_BLUR, ADJ_SHARPEN, ADJ_SEPIA = range(6)
+
+
 def _sig(name, res, *args):
     f = getattr(L, name)
     f.restype = res
@@ -61,6 +64,9 @@ _sig("fd_blit_premul", None, _P, c_int, c_int, c_uint, c_uint, c_void_p, c_uint)
 _sig("fd_fill", c_int, _P, c_int, c_int, c_uint, c_uint)
 _sig("fd_pick", c_uint, _P, c_int, c_int, c_int)
 _sig("fd_invert_colors", None, _P)
+_sig("fd_adjust_preview", None, _P, c_uint, c_float, c_float, c_float)
+_sig("fd_adjust_end", None, _P)
+_sig("fd_adjust_cancel", None, _P)
 _sig("fd_sel_rect", None, _P, c_int, c_int, c_int, c_int)
 _sig("fd_sel_poly", None, _P, POINTER(c_float), c_uint)
 _sig("fd_sel_all", None, _P)
@@ -280,6 +286,20 @@ class Document:
 
     def invert_colors(self):
         L.fd_invert_colors(self.h)
+
+    # ---- adjustments (kinds: ADJ_*); a preview can be changed, then kept or dropped
+    def adjust_preview(self, kind, a=0.0, b=0.0, c=0.0):
+        L.fd_adjust_preview(self.h, kind, float(a), float(b), float(c))
+
+    def adjust_end(self):
+        L.fd_adjust_end(self.h)
+
+    def adjust_cancel(self):
+        L.fd_adjust_cancel(self.h)
+
+    def adjust(self, kind, a=0.0, b=0.0, c=0.0):
+        self.adjust_preview(kind, a, b, c)
+        self.adjust_end()
 
     # ---- selection
     def sel_rect(self, x, y, w, h):

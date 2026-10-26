@@ -50,14 +50,14 @@ pub struct Float {
 }
 
 impl Float {
-    fn refresh(&mut self) {
+    pub(crate) fn refresh(&mut self) {
         self.cur = if self.w == self.sw && self.h == self.sh {
             self.src.clone()
         } else {
             resample(&self.src, self.sw, self.sh, self.w, self.h, true)
         };
     }
-    fn rect(&self) -> (i64, i64, i64, i64) {
+    pub(crate) fn rect(&self) -> (i64, i64, i64, i64) {
         (self.x as i64, self.y as i64, self.x as i64 + self.w as i64, self.y as i64 + self.h as i64)
     }
 }
@@ -106,6 +106,9 @@ pub struct Doc {
     undo_bytes: usize,
     next_step: u64,
     op: Option<OpState>,
+    /// An adjustment being previewed on a floating selection: its pixels before.
+    pub(crate) adj_float: Option<Vec<u8>>,
+    pub(crate) adj_open: bool,
     stroke: Option<Stroke>,
     mask: Vec<u8>,
     pub changes: u64,
@@ -513,6 +516,8 @@ impl Doc {
             undo_bytes: 0,
             next_step: 1,
             op: None,
+            adj_float: None,
+            adj_open: false,
             stroke: None,
             mask: Vec::new(),
             changes: 0,
@@ -863,7 +868,7 @@ impl Doc {
         true
     }
 
-    fn finish_pending(&mut self) {
+    pub(crate) fn finish_pending(&mut self) {
         if self.stroke.is_some() {
             self.stroke_end();
         }
@@ -968,7 +973,7 @@ impl Doc {
     // -------------------------------------------------------------- selection helpers
 
     #[inline]
-    fn sel_at(&self, i: usize) -> f32 {
+    pub(crate) fn sel_at(&self, i: usize) -> f32 {
         match &self.sel {
             Some(m) => m[i] as f32 / 255.0,
             None => 1.0,

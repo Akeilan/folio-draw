@@ -8,7 +8,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from . import engine as E
 from .icons import Icon
@@ -682,3 +682,81 @@ def about(parent, version):
     d.set_authors(["Ron Shillings"])
     d.run()
     d.destroy()
+
+
+# --------------------------------------------------------------------------- Adjustments
+
+ADJUSTMENTS = {
+    # kind: (title, [(label, lo, hi, default, unit)])
+    "brightness": ("Brightness and Contrast", [("Brightness", -100, 100, 0, ""), ("Contrast", -100, 100, 0, "")]),
+    "huesat": ("Hue and Saturation", [("Hue", -180, 180, 0, "°"), ("Saturation", -100, 100, 0, ""),
+                                       ("Lightness", -100, 100, 0, "")]),
+    "blur": ("Blur", [("Radius", 1, 50, 3, "px")]),
+    "sharpen": ("Sharpen", [("Amount", 1, 300, 100, "%")]),
+}
+
+
+def adjust(parent, kind, preview, last=None):
+    """A slider dialog for one adjustment. preview(values) is called as the sliders move
+    (the picture shows it); returns the values on OK, or None."""
+    title, fields = ADJUSTMENTS[kind]
+    d, area = _dialog(parent, title)
+    last = last or {}
+    g = Gtk.Grid(row_spacing=8, column_spacing=10)
+    spins = []
+    for i, (label, lo, hi, default, unit) in enumerate(fields):
+        g.attach(Gtk.Label(label=label + ":", xalign=0), 0, i, 1, 1)
+        adj = Gtk.Adjustment(value=last.get(label, default), lower=lo, upper=hi, step_increment=1, page_increment=10)
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+        scale.set_draw_value(False)
+        scale.set_size_request(240, -1)
+        scale.set_name(label.lower())
+        g.attach(scale, 1, i, 1, 1)
+        spin = Gtk.SpinButton(adjustment=adj, digits=0)
+        spin.set_activates_default(True)
+        spin.set_name(label.lower() + "-value")
+        g.attach(spin, 2, i, 1, 1)
+        if unit:
+            g.attach(Gtk.Label(label=unit, xalign=0), 3, i, 1, 1)
+        spins.append((label, spin, adj))
+    show = Gtk.CheckButton(label="Preview")
+    show.set_name("preview")
+    show.set_active(True)
+    g.attach(show, 0, len(fields), 3, 1)
+    reset = Gtk.Button(label="Reset")
+    reset.connect("clicked", lambda *_: [a.set_value(f[3]) for (_l, _s, a), f in zip(spins, fields)])
+    g.attach(reset, 2, len(fields), 2, 1)
+    area.pack_start(g, False, False, 0)
+
+    def values():
+        return [a.get_value() for _l, _s, a in spins]
+    state = {"pending": 0}
+
+    def changed(*_):
+        # the picture follows the sliders, a moment after they stop
+        if state["pending"]:
+            GLib.source_remove(state["pending"])
+
+        def go():
+            state["pending"] = 0
+            preview(values() if show.get_active() else None)
+            return False
+        state["pending"] = GLib.timeout_add(60, go)
+    for _l, _s, a in spins:
+        a.connect("value-changed", changed)
+    show.connect("toggled", changed)
+    d.values = values
+    d.sliders = spins
+    d.show_all()
+    preview(values())
+    r = d.run()
+    _commit_spins(*[s for _l, s, _a in spins])
+    vals = values()
+    if state["pending"]:
+        GLib.source_remove(state["pending"])
+    d.destroy()
+    if r != Gtk.ResponseType.OK:
+        return None
+    for (label, _s, _a), v in zip(spins, vals):
+        last[label] = v
+    return vals

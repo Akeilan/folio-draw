@@ -1,6 +1,7 @@
 //! Folio Draw engine — C ABI consumed by the GTK front end through ctypes.
 //! No third-party crates: codecs, rasteriser and compositor are all in this crate.
 
+pub mod adjust;
 pub mod bmp;
 pub mod deflate;
 pub mod doc;
@@ -456,6 +457,33 @@ pub unsafe extern "C" fn fd_invert_colors(p: *mut Doc) {
     guard((), || {
         if let Some(doc) = d(p) {
             doc.invert_colors()
+        }
+    })
+}
+
+// ------------------------------------------------------------------ adjustments
+
+#[no_mangle]
+pub unsafe extern "C" fn fd_adjust_preview(p: *mut Doc, kind: u32, a: f32, b: f32, c: f32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.adjust_preview(kind, a, b, c)
+        }
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_adjust_end(p: *mut Doc) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.adjust_end()
+        }
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_adjust_cancel(p: *mut Doc) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.adjust_cancel()
         }
     })
 }

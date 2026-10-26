@@ -420,6 +420,81 @@ SCRIPT.append(lambda d: Gtk.ResponseType.CANCEL)
 r = win._on_delete()
 check("close with changes then Cancel keeps the window open", r is True, r)
 
+# ---- adjustments: live preview, OK keeps, Cancel restores, selection only
+def solid(rgba, w=40, h=30):
+    win.set_document(E.Document.new(w, h, rgba), None)
+    pump(0.05)
+
+
+def px(x, y):
+    o = (y * win.doc.width + x) * 4
+    return tuple(win.doc.layer_rgba(0)[o:o + 4])
+
+
+solid((100, 150, 200, 255))
+seen_preview = {}
+
+
+def bright(d):
+    sc = [s for s in widgets(d, Gtk.Scale)]
+    check("Brightness and Contrast has two sliders", len(sc) == 2, len(sc))
+    named(d, Gtk.Scale, "brightness").get_adjustment().set_value(40)
+    pump(0.2)
+    seen_preview["px"] = px(5, 5)
+    return CANCEL
+
+
+SCRIPT.append(bright)
+win.cmd("adjust", "brightness")
+check("the picture previews the adjustment as the slider moves", seen_preview.get("px", (0,))[0] > 100, seen_preview)
+check("Cancel puts it back", px(5, 5) == (100, 150, 200, 255), px(5, 5))
+check("and leaves nothing to undo", not (win.doc.can_undo() if callable(win.doc.can_undo) else win.doc.can_undo))
+
+
+def bright_ok(d):
+    named(d, Gtk.Scale, "brightness").get_adjustment().set_value(-30)
+    named(d, Gtk.Scale, "contrast").get_adjustment().set_value(20)
+    return OK
+
+
+SCRIPT.append(bright_ok)
+win.cmd("adjust", "brightness")
+check("OK keeps it", px(5, 5)[0] < 100, px(5, 5))
+win.cmd("undo")
+check("one undo takes it back", px(5, 5) == (100, 150, 200, 255), px(5, 5))
+SCRIPT.append(lambda d: (named(d, Gtk.Scale, "saturation").get_adjustment().set_value(-100), OK)[1])
+win.cmd("adjust", "huesat")
+p = px(5, 5)
+check("Saturation -100 makes it grey", p[0] == p[1] == p[2], p)
+win.cmd("undo")
+win.cmd("greyscale")
+p = px(5, 5)
+check("Greyscale", p[0] == p[1] == p[2] and abs(p[0] - 141) <= 1, p)
+win.cmd("undo")
+win.cmd("sepia")
+p = px(5, 5)
+check("Sepia warms it", p[0] > p[1] > p[2], p)
+win.cmd("undo")
+win.doc.sel_rect(0, 0, 10, 30)
+win.cmd("greyscale")
+check("only the selection changes", px(2, 2)[0] == px(2, 2)[1] and px(20, 2) == (100, 150, 200, 255),
+      (px(2, 2), px(20, 2)))
+win.cmd("undo")
+win.doc.sel_none()
+data = bytearray()
+for y in range(3):
+    for x in range(30):
+        data += bytes((255, 255, 255, 255) if x == 20 else (0, 0, 0, 255))
+win.set_document(E.Document.from_rgba(30, 3, data), None)
+pump(0.05)
+SCRIPT.append(lambda d: (named(d, Gtk.Scale, "radius").get_adjustment().set_value(2), OK)[1])
+win.cmd("adjust", "blur")
+check("Blur spreads a white dot", 0 < px(19, 1)[0] < 255 and px(20, 1)[0] < 255, (px(19, 1), px(20, 1)))
+win.cmd("undo")
+SCRIPT.append(lambda d: OK)
+win.cmd("adjust", "sharpen")
+check("Sharpen leaves a flat area flat", px(5, 1) == (0, 0, 0, 255), px(5, 1))
+
 print()
 print("dialogs seen:", SEEN)
 print("ERRORS IN CALLBACKS: %d" % len(ERRORS))

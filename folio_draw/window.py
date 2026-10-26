@@ -64,6 +64,9 @@ SEARCH_COMMANDS = [
     ("Rotate left 90°", ("rot_ccw",), ""), ("Rotate 180°", ("rot_180",), ""),
     ("Rotate by angle", ("rotate_angle",), "Ctrl+Shift+R"), ("Flip horizontal", ("flip_h",), ""),
     ("Flip vertical", ("flip_v",), ""), ("Invert colors", ("invert_colors",), "Ctrl+Shift+I"),
+    ("Brightness and contrast", ("adjust", "brightness"), ""), ("Hue and saturation", ("adjust", "huesat"), ""),
+    ("Greyscale", ("greyscale",), ""), ("Sepia", ("sepia",), ""), ("Blur", ("adjust", "blur"), ""),
+    ("Sharpen", ("adjust", "sharpen"), ""),
     ("Edit colors", ("edit_colors",), ""),
     ("Pencil", ("tool", "pencil"), ""), ("Fill with color", ("tool", "fill"), ""), ("Text", ("tool", "text"), ""),
     ("Eraser", ("tool", "eraser"), ""), ("Color picker", ("tool", "picker"), ""), ("Magnifier", ("tool", "zoom"), ""),
@@ -1067,6 +1070,45 @@ class Window(Gtk.ApplicationWindow):
     def c_invert_colors(self):
         self.finalize_pending()
         self.doc.invert_colors()
+        self.canvas.sync()
+        self.after_edit()
+
+    # ---- adjustments: on the floating selection, else the active layer inside the selection
+    ADJ_KINDS = {"brightness": E.ADJ_BRIGHT_CONTRAST, "huesat": E.ADJ_HUE_SAT, "blur": E.ADJ_BLUR,
+                 "sharpen": E.ADJ_SHARPEN}
+
+    def c_adjust(self, kind):
+        self.finalize_pending()
+        doc = self.doc
+        code = self.ADJ_KINDS[kind]
+        if not hasattr(self, "_adjust_last"):
+            self._adjust_last = {}
+        last = self._adjust_last.setdefault(kind, {})
+
+        def preview(vals):
+            if vals is None:
+                doc.adjust_cancel()
+            else:
+                doc.adjust_preview(code, *vals)
+            self.canvas.sync()
+        vals = D.adjust(self, kind, preview, last)
+        if vals is None:
+            doc.adjust_cancel()
+        else:
+            doc.adjust_preview(code, *vals)
+            doc.adjust_end()
+        self.canvas.sync()
+        self.after_edit()
+
+    def c_greyscale(self):
+        self.finalize_pending()
+        self.doc.adjust(E.ADJ_GREY)
+        self.canvas.sync()
+        self.after_edit()
+
+    def c_sepia(self):
+        self.finalize_pending()
+        self.doc.adjust(E.ADJ_SEPIA)
         self.canvas.sync()
         self.after_edit()
 
