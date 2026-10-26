@@ -109,6 +109,8 @@ pub struct Doc {
     /// An adjustment being previewed on a floating selection: its pixels before.
     pub(crate) adj_float: Option<Vec<u8>>,
     pub(crate) adj_open: bool,
+    /// Copy, Transparent selection and Fill look at every visible layer, not the active one.
+    pub sample_all: bool,
     stroke: Option<Stroke>,
     mask: Vec<u8>,
     pub changes: u64,
@@ -518,6 +520,7 @@ impl Doc {
             op: None,
             adj_float: None,
             adj_open: false,
+            sample_all: false,
             stroke: None,
             mask: Vec::new(),
             changes: 0,
@@ -1032,11 +1035,15 @@ impl Doc {
     /// Remove pixels close to `key` on the active layer from the selection
     /// (used by "transparent selection" so background-coloured pixels stay behind).
     pub fn sel_exclude_color(&mut self, key: [u8; 4], tol: u8) {
-        let Some(m) = self.sel.as_mut() else { return };
-        if self.layers.is_empty() {
+        if self.sel.is_none() || self.layers.is_empty() {
             return;
         }
-        let px = &self.layers[self.active].px;
+        let merged = if self.sample_all && self.layers.len() > 1 { Some(self.flatten_rgba()) } else { None };
+        let Some(m) = self.sel.as_mut() else { return };
+        let px: &[u8] = match &merged {
+            Some(v) => v,
+            None => &self.layers[self.active].px,
+        };
         for (i, v) in m.iter_mut().enumerate() {
             if *v == 0 {
                 continue;
@@ -1315,11 +1322,16 @@ impl Doc {
         let (w, h) = (x1 - x0, y1 - y0);
         let mut out = vec![0u8; w * h * 4];
         let li = self.active;
+        let merged = if self.sample_all && self.layers.len() > 1 { Some(self.flatten_rgba()) } else { None };
+        let src: &[u8] = match &merged {
+            Some(m) => m,
+            None => &self.layers[li].px,
+        };
         for y in y0..y1 {
             for x in x0..x1 {
                 let i = y * self.w + x;
                 let s = self.sel_at(i);
-                let p = &self.layers[li].px[i * 4..i * 4 + 4];
+                let p = &src[i * 4..i * 4 + 4];
                 let a = (p[3] as f32 * s + 0.5) as u8;
                 if a > 0 {
                     let o = ((y - y0) * w + (x - x0)) * 4;
@@ -1708,9 +1720,13 @@ impl Doc {
         if self.sel_at(y as usize * w + x as usize) <= 0.0 {
             return false;
         }
-        let target = pre(&self.layers[li].px[start..start + 4]);
+        let merged = if self.sample_all && self.layers.len() > 1 { Some(self.flatten_rgba()) } else { None };
+        let px: &[u8] = match &merged {
+            Some(v) => v,
+            None => &self.layers[li].px,
+        };
+        let target = pre(&px[start..start + 4]);
         let tol = tol as i32;
-        let px = &self.layers[li].px;
         let sel = self.sel.as_ref();
         let matches = |i: usize| -> bool {
             if let Some(m) = sel {

@@ -100,6 +100,7 @@ class State:
         self.outline = True
         self.fill_shape = False
         self.transparent_sel = False
+        self.sample_all = False
         self.view = {"rulers": False, "grid": False, "statusbar": True, "layers": True}
         self.font_family = "Sans"
         self.font_size = 14.0
@@ -109,7 +110,7 @@ class State:
         self.qat = ["save", "undo", "redo"]
 
     KEYS = ["brush", "shape", "color1", "color2", "custom_colors", "sizes", "tolerance", "outline", "fill_shape",
-            "transparent_sel", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
+            "transparent_sel", "sample_all", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
 
     def load(self):
         try:
@@ -566,6 +567,7 @@ class Window(Gtk.ApplicationWindow):
             GLib.source_remove(self._hint_timer)
             self._hint_timer = None
         self.hint_label.set_text("")
+        doc.set_sample_all(self.state.sample_all)
         self.canvas.reset_document()
         if old is not None:
             old.close()
@@ -998,6 +1000,13 @@ class Window(Gtk.ApplicationWindow):
         if self.state.transparent_sel and self.doc.float_rect():
             self.doc.float_color_key(self.state.color2, 0)
             self.canvas.sync()
+
+    def c_toggle_sample_all(self, on=None):
+        self.state.sample_all = (not self.state.sample_all) if on is None else bool(on)
+        self.doc.set_sample_all(self.state.sample_all)
+        self.hint_label.set_text("Copy, Transparent selection and Fill now use all visible layers."
+                                 if self.state.sample_all else
+                                 "Copy, Transparent selection and Fill now use the active layer.")
 
     def c_crop(self):
         self.finalize_pending()

@@ -461,6 +461,15 @@ pub unsafe extern "C" fn fd_invert_colors(p: *mut Doc) {
     })
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn fd_set_sample_all(p: *mut Doc, on: i32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.sample_all = on != 0
+        }
+    })
+}
+
 // ------------------------------------------------------------------ adjustments
 
 #[no_mangle]

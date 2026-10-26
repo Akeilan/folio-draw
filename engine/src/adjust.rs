@@ -347,4 +347,25 @@ mod tests {
         let p = &t.layers[0].px[16..20];
         assert!(p[3] > 0 && p[0] > 200 && p[1] == 0, "colour stays red at the soft edge: {:?}", p);
     }
+
+    #[test]
+    fn sample_all_layers() {
+        // a red dot on an upper, otherwise empty layer over white
+        let mut d = Doc::new(4, 4, [255, 255, 255, 255]);
+        d.layer_add("Top");
+        let top = d.active;
+        d.layers[top].px[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        d.sel_all();
+        assert!(d.clip_extract());
+        assert_eq!(&d.clip[4..8], &[0, 0, 0, 0], "the active layer alone: empty there");
+        d.sample_all = true;
+        assert!(d.clip_extract());
+        assert_eq!(&d.clip[4..8], &[255, 255, 255, 255], "all layers: the white below shows");
+        assert_eq!(&d.clip[0..4], &[255, 0, 0, 255]);
+        // Fill on the empty top layer fills by what is seen: only the white area, not the dot
+        d.sel_none();
+        assert!(d.flood_fill(3, 3, [0, 0, 255, 255], 0));
+        assert_eq!(&d.layers[top].px[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&d.layers[top].px[60..64], &[0, 0, 255, 255]);
+    }
 }
