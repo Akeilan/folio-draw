@@ -119,7 +119,8 @@ _sig("fd_canvas_size", None, _P, c_uint, c_uint, c_float, c_float)
 _sig("fd_crop_to_selection", c_int, _P)
 
 TOOL_BRUSH, TOOL_PENCIL, TOOL_ERASER, TOOL_AIRBRUSH, TOOL_CALLIG, TOOL_CALLIG2, TOOL_MARKER = range(7)
-FMT_PNG, FMT_ORA, FMT_BMP24, FMT_BMP32, FMT_JPEG, FMT_GIF, FMT_GIF_ANIM = range(7)
+(FMT_PNG, FMT_ORA, FMT_BMP24, FMT_BMP32, FMT_JPEG, FMT_GIF, FMT_GIF_ANIM,
+ FMT_WEBP, FMT_WEBP_ANIM, FMT_TIFF, FMT_ICO) = range(11)
 FLIP_H, FLIP_V, ROT_CW, ROT_180, ROT_CCW = range(5)
 
 

@@ -6,9 +6,15 @@ pub mod bmp;
 pub mod deflate;
 pub mod doc;
 pub mod gif;
+pub mod ico;
 pub mod jpeg;
 pub mod ora;
 pub mod png;
+pub mod tiff;
+pub mod vp8;
+pub mod vp8_tables;
+pub mod vp8l;
+pub mod webp;
 pub mod zip;
 
 use doc::{Doc, Pt};
@@ -128,23 +134,13 @@ pub unsafe extern "C" fn fd_load(path: *const c_char) -> *mut Doc {
         } else if jpeg::is_jpeg(&data) {
             jpeg::decode(&data).map(|i| Doc::from_rgba(i.w, i.h, i.px, "Background"))
         } else if gif::is_gif(&data) {
-            gif::decode_frames(&data).map(|f| {
-                if f.frames.len() == 1 {
-                    let (px, _) = f.frames.into_iter().next().unwrap();
-                    return Doc::from_rgba(f.w, f.h, px, "Background");
-                }
-                // every frame becomes a layer, bottom = first frame
-                let mut doc = Doc::empty(f.w, f.h);
-                for (i, (px, delay)) in f.frames.into_iter().enumerate() {
-                    doc.push_layer(&format!("Frame {}", i + 1), px, 1.0, true, 0);
-                    doc.layers.last_mut().unwrap().delay_ms = delay;
-                }
-                doc.active = 0;
-                doc.solo = true;
-                doc.gif_loop = f.loop_count.map_or(-1, |v| v as i32);
-                doc.frames_truncated = f.truncated;
-                doc
-            })
+            gif::decode_frames(&data).map(frames_doc)
+        } else if webp::is_webp(&data) {
+            webp::decode_frames(&data).map(frames_doc)
+        } else if tiff::is_tiff(&data) {
+            tiff::decode(&data).map(|i| Doc::from_rgba(i.w, i.h, i.px, "Background"))
+        } else if ico::is_ico(&data) {
+            ico::decode(&data).map(|i| Doc::from_rgba(i.w, i.h, i.px, "Background"))
         } else if data.len() > 4 && &data[..4] == b"PK\x03\x04" {
             ora::load(&data)
         } else {
@@ -160,8 +156,43 @@ pub unsafe extern "C" fn fd_load(path: *const c_char) -> *mut Doc {
     })
 }
 
+/// An animation as a document: every frame becomes a layer, bottom = first frame.
+fn frames_doc(f: gif::Frames) -> Doc {
+    if f.frames.len() == 1 {
+        let (px, _) = f.frames.into_iter().next().unwrap();
+        return Doc::from_rgba(f.w, f.h, px, "Background");
+    }
+    let mut doc = Doc::empty(f.w, f.h);
+    for (i, (px, delay)) in f.frames.into_iter().enumerate() {
+        doc.push_layer(&format!("Frame {}", i + 1), px, 1.0, true, 0);
+        doc.layers.last_mut().unwrap().delay_ms = delay;
+    }
+    doc.active = 0;
+    doc.solo = true;
+    doc.gif_loop = f.loop_count.map_or(-1, |v| v as i32);
+    doc.frames_truncated = f.truncated;
+    doc
+}
+
+/// Layers as animation frames (bottom first), each with its opacity applied.
+fn layer_frames(doc: &Doc) -> Vec<Vec<u8>> {
+    doc.layers
+        .iter()
+        .map(|l| {
+            let mut px = l.px.clone();
+            if l.opacity < 1.0 {
+                for p in px.chunks_exact_mut(4) {
+                    p[3] = (p[3] as f32 * l.opacity + 0.5) as u8;
+                }
+            }
+            px
+        })
+        .collect()
+}
+
 /// format: 0 PNG, 1 OpenRaster, 2 BMP 24-bit (flattened on `matte`), 3 BMP 32-bit,
-/// 4 JPEG (flattened on `matte`, quality 92), 5 GIF (flattened), 6 animated GIF (layers = frames)
+/// 4 JPEG (flattened on `matte`, quality 92), 5 GIF (flattened), 6 animated GIF (layers = frames),
+/// 7 WebP (flattened, lossless), 8 animated WebP (layers = frames), 9 TIFF, 10 ICO
 #[no_mangle]
 pub unsafe extern "C" fn fd_save(p: *mut Doc, path: *const c_char, format: u32, matte: u32) -> i32 {
     let path = cstr(path);
@@ -191,19 +222,7 @@ pub unsafe extern "C" fn fd_save(p: *mut Doc, path: *const c_char, format: u32, 
             5 => gif::encode(doc.w, doc.h, &doc.flatten_rgba()),
             6 => {
                 // animation: every layer is one frame, bottom layer first
-                let frames: Vec<Vec<u8>> = doc
-                    .layers
-                    .iter()
-                    .map(|l| {
-                        let mut px = l.px.clone();
-                        if l.opacity < 1.0 {
-                            for p in px.chunks_exact_mut(4) {
-                                p[3] = (p[3] as f32 * l.opacity + 0.5) as u8;
-                            }
-                        }
-                        px
-                    })
-                    .collect();
+                let frames = layer_frames(doc);
                 let refs: Vec<(&[u8], u32)> = frames
                     .iter()
                     .zip(doc.layers.iter())
@@ -212,6 +231,19 @@ pub unsafe extern "C" fn fd_save(p: *mut Doc, path: *const c_char, format: u32, 
                 let lc = if doc.gif_loop < 0 { None } else { Some(doc.gif_loop.min(65535) as u16) };
                 gif::encode_animation(doc.w, doc.h, &refs, lc)
             }
+            7 => webp::encode(doc.w, doc.h, &doc.flatten_rgba()),
+            8 => {
+                let frames = layer_frames(doc);
+                let refs: Vec<(&[u8], u32)> = frames
+                    .iter()
+                    .zip(doc.layers.iter())
+                    .map(|(f, l)| (f.as_slice(), if l.delay_ms == 0 { 100 } else { l.delay_ms }))
+                    .collect();
+                let lc = if doc.gif_loop < 0 { None } else { Some(doc.gif_loop.min(65535) as u16) };
+                webp::encode_animation(doc.w, doc.h, &refs, lc)
+            }
+            9 => tiff::encode(doc.w, doc.h, &doc.flatten_rgba()),
+            10 => ico::encode(doc.w, doc.h, &doc.flatten_rgba()),
             _ => {
                 set_error("unknown format");
                 return -1;
@@ -252,6 +284,12 @@ pub unsafe extern "C" fn fd_decode_file(path: *const c_char, w: *mut u32, h: *mu
             jpeg::decode(&data)
         } else if gif::is_gif(&data) {
             gif::decode(&data)
+        } else if webp::is_webp(&data) {
+            webp::decode(&data)
+        } else if tiff::is_tiff(&data) {
+            tiff::decode(&data)
+        } else if ico::is_ico(&data) {
+            ico::decode(&data)
         } else {
             Err("unsupported".into())
         };
@@ -903,4 +941,93 @@ pub unsafe extern "C" fn fd_canvas_size(p: *mut Doc, w: u32, h: u32, ax: f32, ay
 #[no_mangle]
 pub unsafe extern "C" fn fd_crop_to_selection(p: *mut Doc) -> i32 {
     guard(0, || d(p).map_or(0, |d| d.crop_to_selection() as i32))
+}
+
+/// Decodes every .tif/.ico in $ORACLE_DIR to <name>.rgba (u32 w, u32 h, 1, RGBA) and writes
+/// our own encoding of it as <name>.enc, for checking against reference tools outside the build.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn dump_for_oracle() {
+    let Ok(dir) = std::env::var("ORACLE_DIR") else { return };
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let p = e.unwrap().path();
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_string();
+        let d = std::fs::read(&p).unwrap();
+        let (img, enc): (Result<png::Image, String>, fn(usize, usize, &[u8]) -> Vec<u8>) = match ext.as_str() {
+            "tif" | "tiff" => (tiff::decode(&d), tiff::encode),
+            "ico" | "cur" => (ico::decode(&d), ico::encode),
+            _ => continue,
+        };
+        let mut out = Vec::new();
+        match img {
+            Ok(i) => {
+                out.extend_from_slice(&(i.w as u32).to_le_bytes());
+                out.extend_from_slice(&(i.h as u32).to_le_bytes());
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&i.px);
+                std::fs::write(p.with_extension("enc"), enc(i.w, i.h, &i.px)).unwrap();
+            }
+            Err(e) => out.extend_from_slice(format!("ERR {e}").as_bytes()),
+        }
+        std::fs::write(p.with_extension("rgba"), out).unwrap();
+    }
+}
+
+/// Feeds damaged copies of every file in $FUZZ_DIR to the decoders: they may fail, never panic.
+#[cfg(test)]
+#[test]
+#[ignore]
+fn fuzz_decoders() {
+    let Ok(dir) = std::env::var("FUZZ_DIR") else { return };
+    let mut seed = 0x9e3779b97f4a7c15u64;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut panics = 0;
+    let mut runs = 0;
+    for e in std::fs::read_dir(&dir).unwrap() {
+        let p = e.unwrap().path();
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_string();
+        if !matches!(ext.as_str(), "webp" | "tif" | "ico") {
+            continue;
+        }
+        let orig = std::fs::read(&p).unwrap();
+        if orig.len() > 300_000 {
+            continue;
+        }
+        for k in 0..60 {
+            let mut d = orig.clone();
+            match k % 3 {
+                0 => d.truncate((rnd() as usize) % d.len().max(1)),
+                1 => {
+                    for _ in 0..1 + rnd() % 8 {
+                        let i = (rnd() as usize) % d.len();
+                        d[i] = rnd() as u8;
+                    }
+                }
+                _ => {
+                    // damage only past the headers
+                    let i = 12 + (rnd() as usize) % d.len().saturating_sub(12).max(1);
+                    if i < d.len() {
+                        d[i] ^= 1 << (rnd() % 8);
+                    }
+                }
+            }
+            runs += 1;
+            let r = std::panic::catch_unwind(|| {
+                let _ = webp::decode_frames(&d);
+                let _ = tiff::decode(&d);
+                let _ = ico::decode(&d);
+            });
+            if r.is_err() {
+                panics += 1;
+                std::fs::write(format!("{}/crash_{}_{k}.bin", dir, p.file_stem().unwrap().to_string_lossy()), &d).unwrap();
+            }
+        }
+    }
+    assert_eq!(panics, 0, "{panics} panics in {runs} runs");
 }
