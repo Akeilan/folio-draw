@@ -617,7 +617,7 @@ def layer_properties(parent, name, opacity, visible, blend, delay=0):
     g.attach(sp, 2, 3, 1, 1)
     g.attach(Gtk.Label(label="Frame time:", xalign=0), 0, 4, 1, 1)
     ds = _spin(10, 60000, delay if delay > 0 else 100, step=10)
-    ds.set_tooltip_text("How long this layer shows when the picture is saved as an animated GIF (each layer is one frame).")
+    ds.set_tooltip_text("How long this layer shows when the picture is saved as an animated GIF or WebP (each layer is one frame).")
     g.attach(ds, 1, 4, 1, 1)
     g.attach(Gtk.Label(label="ms", xalign=0), 2, 4, 1, 1)
     area.pack_start(g, False, False, 0)

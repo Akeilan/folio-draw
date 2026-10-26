@@ -598,12 +598,19 @@ win.cmd("layer_add")
 win.set_color(1, (0, 0, 200, 128))
 drag([(100, 200), (300, 200)])
 answers["choice"] = 2
-for ext in (".png", ".jpg", ".bmp", ".gif", ".ora"):
+for ext in (".png", ".jpg", ".bmp", ".gif", ".webp", ".tif", ".ico", ".ora"):
     path = os.path.join(OUT, "audit" + ext)
     win.warned_flatten = False
+    win.gif_mode = "flat"  # one flattened picture, not frames
     ok = win.save_to(path, __import__("folio_draw.window", fromlist=["SAVE_FORMATS"]).SAVE_FORMATS[ext][0])
     check("save %s" % ext, ok and os.path.getsize(path) > 100)
     d2 = E.Document.load(path)
+    if ext == ".ico":
+        # centred on a square, largest size 256; the bands above and below are see-through
+        check("reopen .ico is 256 x 256 with clear padding", (d2.width, d2.height) == (256, 256) and d2.pick(128, 5, True)[3] == 0 and d2.pick(128, 128, True)[3] == 255,
+              (d2.width, d2.height))
+        d2.close()
+        continue
     if ext == ".ora":
         check("reopen .ora keeps 2 layers", d2.layer_count() == 2)
     c = d2.pick(200, 100, True)
@@ -615,6 +622,15 @@ win.set_tool("eraser")
 drag([(500, 400), (600, 400)])
 win.save_to(os.path.join(OUT, "alpha.png"), E.FMT_PNG)
 check("PNG keeps alpha", E.Document.load(os.path.join(OUT, "alpha.png")).pick(550, 400, True)[3] == 0)
+for ext, fmt in ((".webp", E.FMT_WEBP), (".tif", E.FMT_TIFF)):
+    win.warned_flatten = True
+    win.gif_mode = "flat"
+    win.save_to(os.path.join(OUT, "alpha" + ext), fmt)
+    ad = E.Document.load(os.path.join(OUT, "alpha" + ext))
+    check("%s keeps alpha and colour exactly" % ext, ad.pick(550, 400, True)[3] == 0 and ad.pick(200, 100, True) == win.doc.pick(200, 100, True), (ad.pick(200, 100, True), win.doc.pick(200, 100, True)))
+    ad.close()
+win.gif_mode = None
+win.warned_flatten = False
 win.open_path(os.path.join(OUT, "audit.ora"), ask=False)
 check("open .ora in window", win.doc.layer_count() == 2 and win.layers.list.get_children().__len__() == 2)
 
@@ -692,6 +708,20 @@ win.save_to(os.path.join(OUT, "anim.ora"), E.FMT_ORA)
 od = E.Document.load(os.path.join(OUT, "anim.ora"))
 check("OpenRaster keeps frame times, loop and frames view", od.layer_props(3)["delay"] == 250 and od.gif_loop == 2 and od.frames_view)
 od.close()
+# the same animation as WebP: lossless, so every frame comes back exactly
+win.gif_mode = None
+answers["choice"] = 2
+ok = win.save_to(os.path.join(OUT, "anim.webp"), E.FMT_WEBP)
+check("save as animated WebP", ok and win.gif_mode == "anim")
+wd = E.Document.load(os.path.join(OUT, "anim.webp"))
+check("reopened WebP has 4 frame layers, times and loop", wd.layer_count() == 4 and [wd.layer_props(i)["delay"] for i in range(4)] == [100, 150, 200, 250] and wd.gif_loop == 2 and wd.frames_view,
+      (wd.layer_count(), wd.gif_loop))
+def seen(b):
+    return bytes(v for k in range(0, len(b), 4) for v in (b[k:k + 4] if b[k + 3] else b"\0\0\0\0"))
+
+
+check("every WebP frame round-trips exactly", all(seen(wd.layer_rgba(i)) == seen(doc.layer_rgba(i)) for i in range(4)))
+wd.close()
 # flattened GIF choice
 win.gif_mode = None
 answers["choice"] = 1

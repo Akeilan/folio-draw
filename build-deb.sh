@@ -44,9 +44,9 @@ Description: Simple drawing program with layers and real transparency
  Folio Draw is a quick, uncluttered picture editor in the spirit of the classic
  desktop paint program: pencil, brushes, shapes, text, fill, selection, crop,
  resize and rotate — plus layers, blend modes and true alpha transparency.
- Opens and saves PNG, JPEG, BMP, GIF (animated GIFs open with one frame per
- layer) and OpenRaster (.ora, keeps layers) using
- its own native engine. Part of the Folio suite.
+ Opens and saves PNG, JPEG, BMP, GIF, WebP, TIFF, Windows icons and
+ OpenRaster (.ora, keeps layers); animated GIF and WebP open with one frame per
+ layer. All codecs are its own native engine. Part of the Folio suite.
 CTL
 cat > "$ROOT/DEBIAN/postinst" <<'SH'
 #!/bin/sh

@@ -30,13 +30,20 @@ SAVE_FORMATS = {
     ".jpeg": (E.FMT_JPEG, "JPEG picture"),
     ".bmp": (E.FMT_BMP24, "24-bit bitmap"),
     ".gif": (E.FMT_GIF, "GIF picture"),
+    ".webp": (E.FMT_WEBP, "WebP picture"),
+    ".tif": (E.FMT_TIFF, "TIFF picture"),
+    ".tiff": (E.FMT_TIFF, "TIFF picture"),
+    ".ico": (E.FMT_ICO, "Windows icon"),
     ".ora": (E.FMT_ORA, "OpenRaster (keeps layers)"),
 }
 OPEN_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.bmp", "*.dib", "*.gif", "*.ora",
-                 "*.PNG", "*.JPG", "*.JPEG", "*.BMP", "*.GIF", "*.ORA"]
+                 "*.webp", "*.tif", "*.tiff", "*.ico", "*.cur",
+                 "*.PNG", "*.JPG", "*.JPEG", "*.BMP", "*.GIF", "*.ORA", "*.WEBP", "*.TIF", "*.TIFF", "*.ICO", "*.CUR"]
+# a still format and the animated form it can take when layers become frames
+ANIM_FORMATS = {E.FMT_GIF: E.FMT_GIF_ANIM, E.FMT_WEBP: E.FMT_WEBP_ANIM}
 # commands that may run while an animation preview is playing
 PLAYBACK_SAFE = {"play", "zoom_in", "zoom_out", "zoom_100", "zoom_fit", "view_toggle", "fullscreen", "gif_loop", "about"}
-FLAT_ALPHA_FORMATS = {E.FMT_PNG, E.FMT_ORA, E.FMT_GIF, E.FMT_GIF_ANIM}
+FLAT_ALPHA_FORMATS = {E.FMT_PNG, E.FMT_ORA, E.FMT_GIF, E.FMT_GIF_ANIM, E.FMT_WEBP, E.FMT_WEBP_ANIM, E.FMT_TIFF, E.FMT_ICO}
 
 # Quick Access Toolbar: command -> (icon, tooltip), in menu order
 QAT_COMMANDS = {
@@ -613,7 +620,7 @@ class Window(Gtk.ApplicationWindow):
         except E.EngineError as e:
             msg = str(e)
             if msg == "unsupported":
-                msg = "This file isn't a picture Folio Draw can open. Supported formats are PNG, JPEG, BMP, GIF and OpenRaster."
+                msg = "This file isn't a picture Folio Draw can open. Supported formats are PNG, JPEG, BMP, GIF, WebP, TIFF, icons and OpenRaster."
             D.message(self, "Folio Draw can't open %s" % os.path.basename(path), msg, Gtk.MessageType.ERROR)
             return False
         self.set_document(doc, os.path.abspath(path))
@@ -639,18 +646,19 @@ class Window(Gtk.ApplicationWindow):
         doc = self.doc
         self.finalize_pending()
         self.stop_playback()
-        if fmt == E.FMT_GIF and doc.layer_count() > 1:
+        if fmt in ANIM_FORMATS and doc.layer_count() > 1:
+            kind = "GIF" if fmt == E.FMT_GIF else "WebP"
             if self.gif_mode is None:
-                r = D.ask_choice(self, "Save as an animated GIF?",
-                                 "This picture has %d layers. A GIF can play them as an animation, one layer per frame, "
-                                 "starting with the bottom layer. Frame times are set in each layer's properties." % doc.layer_count(),
+                r = D.ask_choice(self, "Save as an animated %s?" % kind,
+                                 "This picture has %d layers. A %s can play them as an animation, one layer per frame, "
+                                 "starting with the bottom layer. Frame times are set in each layer's properties." % (doc.layer_count(), kind),
                                  ["Cancel", "Save one flattened picture", "Save as animation"], default=2)
                 if r < 1:
                     return False
                 self.gif_mode = "anim" if r == 2 else "flat"
             if self.gif_mode == "anim":
-                fmt = E.FMT_GIF_ANIM
-        if fmt not in (E.FMT_ORA, E.FMT_GIF_ANIM) and doc.layer_count() > 1 and not self.warned_flatten:
+                fmt = ANIM_FORMATS[fmt]
+        if fmt not in (E.FMT_ORA, E.FMT_GIF_ANIM, E.FMT_WEBP_ANIM) and doc.layer_count() > 1 and not self.warned_flatten:
             r = D.ask_choice(self, "Save a flattened copy?",
                              "This picture has %d layers. %s files can only hold one, so the layers will be merged in the saved file "
                              "(they stay separate here). Choose OpenRaster to keep the layers." % (doc.layer_count(), os.path.splitext(path)[1].upper().lstrip(".")),
@@ -696,18 +704,21 @@ class Window(Gtk.ApplicationWindow):
         sb.get_style_context().add_class("fd-primary")
         dlg.set_do_overwrite_confirmation(True)
         filters = {}
-        for e in (".png", ".jpg", ".bmp", ".gif", ".ora"):
+        for e in (".png", ".jpg", ".bmp", ".gif", ".webp", ".tif", ".ico", ".ora"):
             f = Gtk.FileFilter()
             f.set_name("%s (*%s)" % (SAVE_FORMATS[e][1], e))
             f.add_pattern("*" + e)
             f.add_pattern("*" + e.upper())
             if e == ".jpg":
                 f.add_pattern("*.jpeg")
+            if e == ".tif":
+                f.add_pattern("*.tiff")
             dlg.add_filter(f)
             filters[e] = f
         if ext is None:
             cur = os.path.splitext(self.path)[1].lower() if self.path else ".png"
-            ext = ".jpg" if cur == ".jpeg" else (cur if cur in filters else ".png")
+            ext = {".jpeg": ".jpg", ".tiff": ".tif"}.get(cur, cur)
+            ext = ext if ext in filters else ".png"
         dlg.set_filter(filters[ext])
         base = os.path.splitext(os.path.basename(self.path))[0] if self.path else "Untitled"
         if self.path:

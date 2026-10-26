@@ -23,6 +23,9 @@ SAVE_FORMATS = [(".png", "PNG picture", "Lossless, keeps transparency (flattened
                 (".jpg", "JPEG picture", "Small files for photos; no transparency"),
                 (".bmp", "BMP picture", "Uncompressed, no transparency"),
                 (".gif", "GIF picture", "256 colors; layers can become animation frames"),
+                (".webp", "WebP picture", "Lossless and compact, keeps transparency; layers can become frames"),
+                (".tif", "TIFF picture", "Lossless, keeps transparency; for print and archiving"),
+                (".ico", "Windows icon", "Icon sizes from 16 to 256 pixels, keeps transparency"),
                 (".ora", "OpenRaster picture", "Keeps every layer, for editing later")]
 
 

@@ -792,7 +792,7 @@ class Ribbon(Gtk.Box):
         self.loop_combo = Gtk.ComboBoxText()
         for label in ("Forever", "Once", "2 times", "3 times", "5 times", "10 times"):
             self.loop_combo.append_text(label)
-        self.loop_combo.set_tooltip_text("How many times the saved GIF plays")
+        self.loop_combo.set_tooltip_text("How many times the saved animation plays")
         self.loop_combo.connect("changed", lambda c: (not self._sync) and w.cmd("gif_loop", c.get_active()))
         rep.pack_start(self.loop_combo, False, False, 0)
         for b in (prev_b, next_b, rep):
