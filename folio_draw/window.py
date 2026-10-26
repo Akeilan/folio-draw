@@ -19,6 +19,7 @@ from .canvas import ZOOM_STEPS, Canvas
 from .icons import Icon
 from .layers import LayersPanel
 from .history import HistoryPanel
+from . import theme
 from .ribbon import Ribbon
 
 APP_NAME = "Folio Draw"
@@ -452,7 +453,7 @@ class Window(Gtk.ApplicationWindow):
         return sb
 
     def hint(self, text, seconds=7):
-        self.hint_label.set_markup("<span foreground='#800000'>%s</span>" % GLib.markup_escape_text(text))
+        self.hint_label.set_markup("<span foreground='%s'>%s</span>" % (theme.chrome("accent_text"), GLib.markup_escape_text(text)))
         if self._hint_timer:
             GLib.source_remove(self._hint_timer)
 

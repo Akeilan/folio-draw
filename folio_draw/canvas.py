@@ -12,6 +12,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from .tools import SEL_TOOLS
+from . import theme
 from .stabilizer import Stabilizer
 from . import engine as E
 from . import shapes as S
@@ -143,7 +144,7 @@ class Canvas(Gtk.Grid):
         self.vruler.connect("draw", self._draw_ruler, False)
         corner = Gtk.DrawingArea()
         corner.set_size_request(RULER, RULER)
-        corner.connect("draw", lambda w, cr: (cr.set_source_rgb(0.965, 0.965, 0.965), cr.paint()))
+        corner.connect("draw", lambda w, cr: (cr.set_source_rgb(*theme.chrome("ruler")), cr.paint()))
         self.corner = corner
         self.hscroll = Gtk.Scrollbar(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.hadj)
         self.vscroll = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=self.vadj)
@@ -288,7 +289,7 @@ class Canvas(Gtk.Grid):
     def _draw(self, w, cr):
         doc = self.doc
         aw, ah = w.get_allocated_width(), w.get_allocated_height()
-        cr.set_source_rgb(0.902, 0.902, 0.902)   # suite canvas grey #e6e6e6
+        cr.set_source_rgb(*theme.chrome("workspace"))   # suite canvas grey #e6e6e6 (dark: #1f1f1f)
         cr.paint()
         if doc is None or self.surf is None:
             return False
@@ -562,9 +563,9 @@ class Canvas(Gtk.Grid):
     # ------------------------------------------------------------------ rulers
     def _draw_ruler(self, w, cr, horizontal):
         width, height = w.get_allocated_width(), w.get_allocated_height()
-        cr.set_source_rgb(0.965, 0.965, 0.965)
+        cr.set_source_rgb(*theme.chrome("ruler"))
         cr.paint()
-        cr.set_source_rgb(0.78, 0.72, 0.72)
+        cr.set_source_rgb(*theme.chrome("ruler_line"))
         cr.set_line_width(1)
         if horizontal:
             cr.move_to(0, height - 0.5)
@@ -585,7 +586,7 @@ class Canvas(Gtk.Grid):
         length = width if horizontal else height
         origin = self.ox if horizontal else self.oy
         start = math.floor((-origin) / z / minor) * minor
-        cr.set_source_rgb(0.35, 0.3, 0.3)
+        cr.set_source_rgb(*theme.chrome("ruler_text"))
         cr.select_font_face("Sans", 0, 0)
         cr.set_font_size(8.5)
         v = start
