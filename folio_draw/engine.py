@@ -103,12 +103,26 @@ _sig("fd_layer_thumb", None, _P, c_uint, c_void_p, c_uint, c_uint)
 _sig("fd_image_transform", None, _P, c_uint)
 _sig("fd_image_resize", None, _P, c_uint, c_uint, c_int)
 _sig("fd_image_skew", None, _P, c_float, c_float)
+_sig("fd_image_rotate", None, _P, c_float, c_int, c_uint)
+_sig("fd_float_rotate", None, _P, c_float, c_int)
 _sig("fd_canvas_size", None, _P, c_uint, c_uint, c_float, c_float)
 _sig("fd_crop_to_selection", c_int, _P)
 
 TOOL_BRUSH, TOOL_PENCIL, TOOL_ERASER, TOOL_AIRBRUSH, TOOL_CALLIG, TOOL_CALLIG2, TOOL_MARKER = range(7)
 FMT_PNG, FMT_ORA, FMT_BMP24, FMT_BMP32, FMT_JPEG, FMT_GIF, FMT_GIF_ANIM = range(7)
 FLIP_H, FLIP_V, ROT_CW, ROT_180, ROT_CCW = range(5)
+
+
+def rotated_size(w, h, deg):
+    """The size of a w x h image rotated by `deg` (matches the engine)."""
+    import math
+    n = deg % 360.0
+    for k, a in enumerate((0.0, 90.0, 180.0, 270.0, 360.0)):
+        if abs(n - a) < 1e-3:
+            return (h, w) if k % 2 else (w, h)
+    t = math.radians(n)
+    c, s = abs(math.cos(t)), abs(math.sin(t))
+    return (max(1, math.ceil(w * c + h * s - 1e-3)), max(1, math.ceil(w * s + h * c - 1e-3)))
 BLEND_NAMES = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Add"]
 
 
@@ -426,6 +440,14 @@ class Document:
 
     def image_skew(self, ax, ay):
         L.fd_image_skew(self.h, ax, ay)
+
+    def image_rotate(self, deg, smooth=True, fill=None):
+        """Rotate the whole image by any angle (degrees, clockwise); `fill` colours the
+        uncovered corners of the bottom layer, None leaves them transparent."""
+        L.fd_image_rotate(self.h, float(deg), 1 if smooth else 0, pack(fill) if fill and fill[3] else 0)
+
+    def float_rotate(self, deg, smooth=True):
+        L.fd_float_rotate(self.h, float(deg), 1 if smooth else 0)
 
     def canvas_size(self, w, h, ax=0.0, ay=0.0):
         L.fd_canvas_size(self.h, int(w), int(h), ax, ay)

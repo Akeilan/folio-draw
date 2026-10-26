@@ -22,6 +22,7 @@ from folio_draw import engine as E  # noqa: E402
 from shot import make, pump, shot  # noqa: E402
 
 OUT = os.environ.get("AUDIT_OUT", tempfile.mkdtemp(prefix="fd-dlg-"))
+os.makedirs(OUT, exist_ok=True)
 checks = []
 
 
@@ -185,6 +186,102 @@ win.cmd("resize")
 fr = win.doc.float_rect()
 check("selection resized", fr is not None and fr[2:] == (200, 100), fr)
 win.set_tool("pencil")
+
+# ---- Rotate by any angle
+def named(d, cls, name):
+    for w in widgets(d, cls):
+        if w.get_name() == name:
+            return w
+    raise LookupError(name)
+
+
+fresh(200, 100)
+win.state.color2 = (0, 0, 255, 255)
+
+
+def rot30(d):
+    a = named(d, Gtk.SpinButton, "angle")
+    a.set_text("30")  # typed, never committed
+    size = named(d, Gtk.Label, "size").get_text()
+    check("rotate dialog shows the new size", "×" in size, size)
+    check("an opaque picture fills its corners by default", named(d, Gtk.CheckButton, "fill").get_active())
+    return OK
+
+
+SCRIPT.append(rot30)
+win.cmd("rotate_angle")
+exp = E.rotated_size(200, 100, 30)
+check("rotate 30° grows the canvas to fit", (win.doc.width, win.doc.height) == exp, (win.doc.width, win.doc.height, exp))
+corner = win.doc.layer_rgba(0)[0:4]
+check("corners take the secondary color", tuple(corner) == (0, 0, 255, 255), tuple(corner))
+mid = (win.doc.height // 2 * win.doc.width + win.doc.width // 2) * 4
+check("the picture itself is kept", tuple(win.doc.layer_rgba(0)[mid:mid + 4]) == (255, 255, 255, 255))
+win.cmd("undo")
+check("undo restores the size", (win.doc.width, win.doc.height) == (200, 100), (win.doc.width, win.doc.height))
+
+
+def rot_ccw_clear(d):
+    named(d, Gtk.SpinButton, "angle").set_value(45)
+    named(d, Gtk.RadioButton, "ccw").set_active(True)
+    named(d, Gtk.CheckButton, "fill").set_active(False)
+    return OK
+
+
+SCRIPT.append(rot_ccw_clear)
+win.cmd("rotate_angle")
+check("counter-clockwise 45° rotates", (win.doc.width, win.doc.height) == E.rotated_size(200, 100, -45))
+check("unfilled corners are transparent", win.doc.layer_rgba(0)[3] == 0)
+
+
+def remembers(d):
+    a = named(d, Gtk.SpinButton, "angle").get_value()
+    check("the dialog remembers the last angle and direction", a == 45 and named(d, Gtk.RadioButton, "ccw").get_active(), a)
+    return CANCEL
+
+
+w0 = (win.doc.width, win.doc.height)
+SCRIPT.append(remembers)
+win.cmd("rotate_angle")
+check("cancel leaves the image", (win.doc.width, win.doc.height) == w0)
+
+fresh(400, 300)
+win.set_tool("select")
+drag_on(win, [(10, 10), (110, 60)])
+
+
+def sel_rot(d):
+    check("a selection has no corner-fill option", not any(w.get_name() == "fill" for w in widgets(d, Gtk.CheckButton)))
+    named(d, Gtk.RadioButton, "cw").set_active(True)
+    named(d, Gtk.SpinButton, "angle").set_value(90)
+    return OK
+
+
+SCRIPT.append(sel_rot)
+win.cmd("rotate_angle")
+fr = win.doc.float_rect()
+check("selection rotated 90° about its centre", fr is not None and fr[2:] == (50, 100) and (win.doc.width, win.doc.height) == (400, 300), fr)
+
+
+def sel_rot2(d):
+    named(d, Gtk.SpinButton, "angle").set_value(20)
+    return OK
+
+
+SCRIPT.append(sel_rot2)
+win.cmd("rotate_angle")
+fr = win.doc.float_rect()
+check("a floating selection rotates again by any angle", fr is not None and fr[2:] == E.rotated_size(50, 100, 20), fr)
+win.set_tool("pencil")
+
+
+class FakeKey:
+    keyval = Gdk.KEY_R
+    state = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+
+
+n = len(SEEN)
+win._key(win, FakeKey())
+check("Ctrl+Shift+R opens Rotate", SEEN[n:] == ["Rotate"], SEEN[n:])
 
 # ---- Image properties with units
 fresh()

@@ -774,6 +774,30 @@ pub unsafe extern "C" fn fd_image_transform(p: *mut Doc, kind: u32) {
     })
 }
 #[no_mangle]
+pub unsafe extern "C" fn fd_image_rotate(p: *mut Doc, deg: f32, smooth: i32, bg: u32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            if deg.is_finite() {
+                let (w, h) = doc::rotated_size(doc.w, doc.h, deg);
+                if w <= 32768 && h <= 32768 {
+                    let c = rgba(bg);
+                    doc.image_rotate(deg, smooth != 0, if c[3] == 0 { None } else { Some(c) })
+                }
+            }
+        }
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_float_rotate(p: *mut Doc, deg: f32, smooth: i32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            if deg.is_finite() {
+                doc.float_rotate(deg, smooth != 0)
+            }
+        }
+    })
+}
+#[no_mangle]
 pub unsafe extern "C" fn fd_image_resize(p: *mut Doc, w: u32, h: u32, smooth: i32) {
     guard((), || {
         if let Some(doc) = d(p) {
