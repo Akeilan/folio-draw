@@ -11,6 +11,8 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
+from .tools import SEL_TOOLS
+from .stabilizer import Stabilizer
 from . import engine as E
 from . import shapes as S
 from .icons import paint_icon
@@ -93,6 +95,8 @@ class Canvas(Gtk.Grid):
         self.pending = None
         self.text = None             # text box dict while editing
         self.sel_path = None         # outline of the current selection for display
+        self.polysel = None          # polygon selection being placed: points, the pointer, mode
+        self._outline = None         # cached edge segments of the selection mask
         self.ants = 0
         self.mouse = None            # last doc position under the pointer
         self.marquee = None
@@ -264,6 +268,7 @@ class Canvas(Gtk.Grid):
         doc = self.doc
         if doc is None:
             return
+        self._outline = None
         key = (doc.h, doc.width, doc.height, doc.comp_ptr())
         if key != self.surf_key:
             buf = doc.comp_buffer()
@@ -432,8 +437,15 @@ class Canvas(Gtk.Grid):
                         cr.close_path()
                     self._ants(cr, path)
                 else:
-                    x, y, w, h = b
-                    self._ants(cr, lambda: self._rect_path(cr, x, y, x + w, y + h))
+                    if self._outline is None:
+                        self._outline = doc.sel_outline()
+                    segs = self._outline
+
+                    def outline():
+                        for x0, y0, x1, y1 in segs:
+                            cr.move_to(*self.to_screen(x0, y0))
+                            cr.line_to(*self.to_screen(x1, y1))
+                    self._ants(cr, outline)
         # live marquee / lasso while dragging
         if self.marquee is not None:
             if self.marquee[0] == "rect":
@@ -448,6 +460,19 @@ class Canvas(Gtk.Grid):
                         for q in pts[1:]:
                             cr.line_to(*self.to_screen(*q))
                     self._ants(cr, lasso)
+        # polygon selection being placed
+        ps = self.polysel
+        if ps is not None:
+            pts = ps["pts"] + [ps["hover"]]
+
+            def poly():
+                cr.move_to(*self.to_screen(*pts[0]))
+                for q in pts[1:]:
+                    cr.line_to(*self.to_screen(*q))
+            self._ants(cr, poly)
+            for q in ps["pts"]:
+                sx, sy = self.to_screen(*q)
+                self._handle_at(cr, sx, sy)
         # pending shape
         p = self.pending
         if p is not None:
@@ -677,7 +702,7 @@ class Canvas(Gtk.Grid):
                 self.set_cursor("move")
                 return
         fr = doc.float_rect()
-        if fr and st.tool in ("select", "freeselect"):
+        if fr and st.tool in SEL_TOOLS:
             x, y, w, h = fr
             hh = self._hit_handle((x, y, x + w, y + h), wx, wy)
             if hh:
@@ -687,7 +712,7 @@ class Canvas(Gtk.Grid):
             if x <= dx < x + w and y <= dy < y + h:
                 self.set_cursor("move")
                 return
-        if st.tool in ("select", "freeselect"):
+        if st.tool in SEL_TOOLS:
             b = doc.sel_bounds()
             if b:
                 dx, dy = self.to_doc(wx, wy)
@@ -743,6 +768,15 @@ class Canvas(Gtk.Grid):
             self.render_pending()
         self.pending = None
         self.doc.op_end()
+        # what the step was, and the colours it used
+        st = self.st
+        outline, fill = self._button_colors(p.button)
+        open_kind = p.kind in ("line", "curve")
+        if open_kind or st.outline:
+            self.win.note_color(outline)
+        if not open_kind and st.fill_shape:
+            self.win.note_color(fill)
+        self.win._action = dict(S.SHAPES).get(p.kind, "Shape")
         self.sync()
         self.win.after_edit()
 
@@ -755,6 +789,7 @@ class Canvas(Gtk.Grid):
         return True
 
     def finalize(self):
+        self.polysel = None
         """Commit anything in progress (shape, text) before a command runs."""
         if self.drag and self.drag.get("kind") == "stroke":
             self.doc.stroke_end()
@@ -765,6 +800,7 @@ class Canvas(Gtk.Grid):
     # ------------------------------------------------------------------ mouse
     def _press(self, w, ev):
         self.area.grab_focus()
+        self.win._action = None
         if self.win.playing:
             self.win.stop_playback()
         doc = self.doc
@@ -859,15 +895,19 @@ class Canvas(Gtk.Grid):
             else:
                 code, hard = BRUSH_TOOLS[st.brush]
             color = self._button_colors(ev.button)[0]
+            self.win.note_color(color)
             doc.stroke_begin(code, float(self.win.current_size()), hard, color)
             px, py = (math.floor(x) + 0.5, math.floor(y) + 0.5) if tool == "pencil" else (x, y)
             doc.stroke_to(px, py)
-            self.drag = {"kind": "stroke", "tool": tool, "start": (px, py)}
+            stab = Stabilizer(*st.stabilizer[tool], zoom=self.z)
+            stab.start(x, y)
+            self.drag = {"kind": "stroke", "tool": tool, "start": (px, py), "stab": stab if stab.active else None}
             if tool == "brush" and st.brush == "airbrush":
                 self.drag["timer"] = GLib.timeout_add(40, self._airbrush_tick)
             self.sync()
         elif tool == "fill":
             color = self._button_colors(ev.button)[0]
+            self.win.note_color(color)
             if doc.fill(int(math.floor(x)), int(math.floor(y)), color, int(round(st.tolerance * 2.55))):
                 self.sync()
                 self.win.after_edit()
@@ -899,10 +939,37 @@ class Canvas(Gtk.Grid):
                 self.pending = Pending(kind, ev.button, [(x, y), (x, y)])
             doc.op_begin()
             self.drag = {"kind": "shapenew", "start": (x, y)}
-        elif tool in ("select", "freeselect"):
+        elif tool in SEL_TOOLS:
             if ev.button == 3:
+                if self.polysel is not None:
+                    self.polysel = None
+                    self.area.queue_draw()
                 self.win.popup_selection_menu(ev)
                 self.interacting = False
+                return True
+            alt = bool(ev.state & Gdk.ModifierType.MOD1_MASK)
+            # Shift adds to the selection, Alt takes away, both keep what is in both
+            mode = (E.Document.SEL_INTERSECT if shift and alt else E.Document.SEL_ADD if shift
+                    else E.Document.SEL_SUBTRACT if alt else E.Document.SEL_REPLACE)
+            if tool == "polyselect" and self.polysel is not None:
+                ps = self.polysel
+                first = self.to_screen(*ps["pts"][0])
+                if dbl or (len(ps["pts"]) >= 3 and math.hypot(wx - first[0], wy - first[1]) <= HANDLE):
+                    if dbl and len(ps["pts"]) > 3:
+                        ps["pts"].pop()   # the double-click's first press added a point
+                    self.polysel_finish()
+                else:
+                    ps["pts"].append((x, y))
+                    ps["hover"] = (x, y)
+                    self.area.queue_draw()
+                self.interacting = False
+                return True
+            if mode != E.Document.SEL_REPLACE or tool in ("wand", "polyselect"):
+                # combining (or a wand click / polygon point): no moving, start the new part straight away
+                if doc.float_rect():
+                    doc.float_commit()
+                    self.win.after_edit()
+                self._sel_start(tool, x, y, mode)
                 return True
             fr = doc.float_rect()
             if fr:
@@ -927,12 +994,43 @@ class Canvas(Gtk.Grid):
                 self._lift(not ctrl)
                 self.drag = {"kind": "floatmove", "orig": doc.float_rect(), "start": (x, y)}
                 return True
-            if tool == "select":
-                self.drag = {"kind": "marquee", "start": (x, y)}
-                self.marquee = ("rect", x, y, x, y)
-            else:
-                self.drag = {"kind": "lasso"}
-                self.marquee = ("lasso", [(x, y)])
+            self._sel_start(tool, x, y, mode)
+        return True
+
+    def _sel_start(self, tool, x, y, mode):
+        doc = self.doc
+        if tool == "select":
+            self.drag = {"kind": "marquee", "start": (x, y), "mode": mode}
+            self.marquee = ("rect", x, y, x, y)
+        elif tool == "freeselect":
+            self.drag = {"kind": "lasso", "mode": mode}
+            self.marquee = ("lasso", [(x, y)])
+        elif tool == "polyselect":
+            self.polysel = {"pts": [(x, y)], "hover": (x, y), "mode": mode}
+            self.interacting = False
+            self.area.queue_draw()
+        elif tool == "wand":
+            self.interacting = False
+            if 0 <= x < doc.width and 0 <= y < doc.height:
+                doc.sel_set_mode(mode)
+                doc.sel_magic(int(math.floor(x)), int(math.floor(y)), int(round(self.st.wand_tolerance * 2.55)),
+                              self.st.wand_contiguous)
+                self.sel_path = None
+                self.sync()
+                b = doc.sel_bounds()
+                self.win.on_selection_size(b[2], b[3]) if b else self.win.on_selection_size(0, 0)
+
+    def polysel_finish(self):
+        """Close the polygon selection being placed (at least three points)."""
+        ps, self.polysel = self.polysel, None
+        if ps is None:
+            return False
+        if len(ps["pts"]) >= 3:
+            self.doc.sel_set_mode(ps["mode"])
+            self.doc.sel_poly(ps["pts"])
+            replace = ps["mode"] == E.Document.SEL_REPLACE
+            self.sel_path = list(ps["pts"]) if replace and self.doc.sel_bounds() else None
+        self.sync()
         return True
 
     def _lift(self, cut):
@@ -946,11 +1044,25 @@ class Canvas(Gtk.Grid):
         self.sync()
         return ok
 
+    def _stroke_to(self, d, pts):
+        drew = False
+        for p in pts:
+            if p is None:
+                continue
+            x, y = p
+            if d["tool"] == "pencil":
+                x, y = math.floor(x) + 0.5, math.floor(y) + 0.5
+            self.doc.stroke_to(x, y)
+            d["at"] = (x, y)
+            drew = True
+        if drew:
+            self.sync()
+
     def _airbrush_tick(self):
         d = self.drag
         if not d or d.get("kind") != "stroke" or not self.mouse:
             return False
-        self.doc.stroke_to(*self.mouse)
+        self.doc.stroke_to(*(d.get("at") if d.get("stab") and d.get("at") else self.mouse))
         self.sync()
         return True
 
@@ -979,6 +1091,9 @@ class Canvas(Gtk.Grid):
         d = self.drag
         if d is None:
             self._update_cursor(wx, wy)
+            if self.polysel is not None:
+                self.polysel["hover"] = (x, y)
+                self.area.queue_draw()
             p = self.pending
             if p is not None and p.kind == "polygon" and p.stage < 3 and len(p.pts) >= 2:
                 pass
@@ -990,10 +1105,7 @@ class Canvas(Gtk.Grid):
             self.hadj.set_value(d["h"] - (wx - d["wx"]))
             self.vadj.set_value(d["v"] - (wy - d["wy"]))
         elif k == "stroke":
-            if d["tool"] == "pencil":
-                x, y = math.floor(x) + 0.5, math.floor(y) + 0.5
-            doc.stroke_to(x, y)
-            self.sync()
+            self._stroke_to(d, [(x, y)] if d["stab"] is None else [d["stab"].feed(x, y)])
         elif k == "shapenew":
             p = self.pending
             sx, sy = d["start"]
@@ -1040,7 +1152,8 @@ class Canvas(Gtk.Grid):
             self.render_pending()
         elif k == "marquee":
             sx, sy = d["start"]
-            end = self._snap((sx, sy), (x, y), square=True) if shift else (x, y)
+            square = shift and d.get("mode", 0) == E.Document.SEL_REPLACE
+            end = self._snap((sx, sy), (x, y), square=True) if square else (x, y)
             self.marquee = ("rect", sx, sy, end[0], end[1])
             self.win.on_selection_size(abs(end[0] - sx), abs(end[1] - sy))
             self.area.queue_draw()
@@ -1127,6 +1240,8 @@ class Canvas(Gtk.Grid):
         elif k == "stroke":
             if "timer" in d:
                 GLib.source_remove(d["timer"])
+            if d["stab"] is not None:
+                self._stroke_to(d, d["stab"].finish())
             doc.stroke_end()
             self.sync()
             self.win.after_edit()
@@ -1152,20 +1267,24 @@ class Canvas(Gtk.Grid):
             _, x0, y0, x1, y1 = self.marquee
             self.marquee = None
             bx = _norm_box(round(x0), round(y0), round(x1), round(y1))
+            mode = d.get("mode", E.Document.SEL_REPLACE)
             if bx[2] - bx[0] >= 1 and bx[3] - bx[1] >= 1:
+                doc.sel_set_mode(mode)
                 doc.sel_rect(bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1])
                 self.sel_path = None
-            else:
+            elif mode == E.Document.SEL_REPLACE:
                 doc.sel_none()
                 self.sel_path = None
             self.sync()
         elif k == "lasso":
             pts = self.marquee[1]
             self.marquee = None
+            mode = d.get("mode", E.Document.SEL_REPLACE)
             if len(pts) >= 3:
+                doc.sel_set_mode(mode)
                 doc.sel_poly(pts)
-                self.sel_path = pts if doc.sel_bounds() else None
-            else:
+                self.sel_path = pts if mode == E.Document.SEL_REPLACE and doc.sel_bounds() else None
+            elif mode == E.Document.SEL_REPLACE:
                 doc.sel_none()
                 self.sel_path = None
             self.sync()
@@ -1236,6 +1355,10 @@ class Canvas(Gtk.Grid):
         return False
 
     def escape(self):
+        if self.polysel is not None:
+            self.polysel = None
+            self.area.queue_draw()
+            return True
         if self.drag:
             d = self.drag
             self.drag = None
@@ -1274,6 +1397,10 @@ class Canvas(Gtk.Grid):
         return False
 
     def enter(self):
+        if self.polysel is not None:
+            if len(self.polysel["pts"]) >= 3:
+                self.polysel_finish()
+            return True
         p = self.pending
         if p is not None:
             if p.kind == "polygon" and p.stage < 3:
@@ -1467,6 +1594,8 @@ class Canvas(Gtk.Grid):
                 self.doc.text_layer_set(i, spec, (t["x"], t["y"]) + block)
             else:
                 self.doc.text_layer_add("Text", spec, t["x"], t["y"], *block)
+            self.win.note_color(self.st.color1)
+            self.win._action = "Text"
             self.sync()
             self.win.after_edit()
         elif i is not None:

@@ -213,6 +213,7 @@ class LayersPanel(Gtk.Box):
         doc = self.win.doc
         p = doc.layer_props(i)
         doc.layer_set(i, visible=not p["visible"], record=True)
+        self.win._action = "Show layer" if not p["visible"] else "Hide layer"
         self.win.canvas.sync()
         self.refresh()
         self.win.after_edit()
@@ -222,6 +223,7 @@ class LayersPanel(Gtk.Box):
             return
         doc = self.win.doc
         doc.layer_set(doc.active, blend=combo.get_active(), record=True)
+        self.win._action = "Layer blend mode"
         self.win.canvas.sync()
         self.refresh()
         self.win.after_edit()
@@ -232,6 +234,7 @@ class LayersPanel(Gtk.Box):
         doc = self.win.doc
         v = s.get_value() / 100.0
         doc.layer_set(doc.active, opacity=v, record=not self._opacity_recorded)
+        self.win._action = "Layer opacity"
         self._opacity_recorded = True
         self.opacity_lbl.set_text("%d%%" % round(v * 100))
         self.win.canvas.sync()
