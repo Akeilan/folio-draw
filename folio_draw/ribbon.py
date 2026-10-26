@@ -8,6 +8,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gtk, PangoCairo  # noqa: E402
 
+from .tools import SEL_TOOLS
+from .stabilizer import TOOLS as STAB_TOOLS, NAMES as STAB_NAMES, TIPS as STAB_TIPS
 from . import shapes
 from .icons import INK, Icon
 
@@ -334,7 +336,7 @@ class Ribbon(Gtk.Box):
         kt("home", self.edit_colors_btn, "EC")
         for cmd, tip in (("zoom_in", "I"), ("zoom_out", "O"), ("zoom_100", "Z"), ("zoom_fit", "W")):
             kt("view", self.zoom_buttons[cmd], tip)
-        for key, tip in (("rulers", "R"), ("grid", "G"), ("statusbar", "S"), ("layers", "L")):
+        for key, tip in (("rulers", "R"), ("grid", "G"), ("statusbar", "S"), ("layers", "L"), ("history", "H")):
             kt("view", self.view_checks[key], tip)
         kt("view", self.fullscreen_btn, "F")
         kt("view", self.frames_btn, "FV")
@@ -406,9 +408,28 @@ class Ribbon(Gtk.Box):
                                           cb=lambda: w.cmd("toggle_transparent_sel", self.transparent_item.get_active()))
         self.sample_item = menu_item("Sample all layers", check=self.st.sample_all,
                                      cb=lambda: w.cmd("toggle_sample_all", self.sample_item.get_active()))
+        self.contig_item = menu_item("Contiguous", check=self.st.wand_contiguous,
+                                     cb=lambda: w.cmd("toggle_wand_contiguous", self.contig_item.get_active()))
+        tol_item = Gtk.MenuItem(label="Magic wand tolerance")
+        tol_menu = Gtk.Menu()
+        self.tol_items = {}
+        group_ = None
+        for pct in (0, 10, 25, 50, 75):
+            ri = Gtk.RadioMenuItem.new_with_label_from_widget(group_, "%d%%" % pct)
+            group_ = group_ or ri
+            ri.set_active(self.st.wand_tolerance == pct)
+            ri.connect("toggled", lambda r, p=pct: r.get_active() and not self._sync and w.cmd("wand_tolerance", p))
+            tol_menu.append(ri)
+            self.tol_items[pct] = ri
+        tol_item.set_submenu(tol_menu)
+        tol_item.item_label = "Magic wand tolerance"
         sel_menu = make_menu([
             ("Rectangular selection", "select", lambda: w.set_tool("select")),
             ("Free-form selection", "freeselect", lambda: w.set_tool("freeselect")),
+            ("Polygon selection", "polyselect", lambda: w.set_tool("polyselect")),
+            ("Magic wand", "wand", lambda: w.set_tool("wand")),
+            tol_item,
+            self.contig_item,
             None,
             ("Select all", "selall", lambda: w.cmd("select_all"), "Ctrl+A"),
             ("Invert selection", "selinvert", lambda: w.cmd("invert_selection")),
@@ -555,6 +576,30 @@ class Ribbon(Gtk.Box):
         hb.pack_start(self.size_scale, True, True, 0)
         hb.pack_start(self.size_spin, False, False, 0)
         sb.pack_start(hb, False, False, 0)
+        # stabilizer, kept for each of the pencil, brushes and eraser
+        self.stab_box = _box(True, 2)
+        self.stab_box.pack_start(Gtk.Separator(), False, False, 4)
+        self.stab_title = Gtk.Label(xalign=0)
+        self.stab_title.get_style_context().add_class("fd-layers-title")
+        self.stab_box.pack_start(self.stab_title, False, False, 0)
+        self.stab_scales = []
+        for i, (name, tip) in enumerate(zip(STAB_NAMES, STAB_TIPS)):
+            r = _box(False, 6)
+            lab = Gtk.Label(label=name, xalign=0)
+            lab.set_size_request(110, -1)
+            sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+            sc.set_size_request(150, -1)
+            sc.set_value_pos(Gtk.PositionType.RIGHT)
+            sc.set_digits(0)
+            sc.get_style_context().add_class("fd-accent")
+            sc.connect("format-value", lambda _s, v: "%d%%" % v)
+            sc.connect("value-changed", lambda s_, i=i: (not self._sync) and w.cmd("stabilizer", i, int(s_.get_value())))
+            r.set_tooltip_text(name + "\n" + tip)
+            r.pack_start(lab, False, False, 0)
+            r.pack_start(sc, True, True, 0)
+            self.stab_box.pack_start(r, False, False, 0)
+            self.stab_scales.append(sc)
+        sb.pack_start(self.stab_box, False, False, 0)
         sb.show_all()
         self.size_pop.add(sb)
         self.size_pop.connect("show", lambda *_: self._fill_size_presets())
@@ -606,7 +651,21 @@ class Ribbon(Gtk.Box):
         self.edit_colors_btn = edit
         colors.pack_start(edit, False, False, 0)
         row.pack_start(group("Colors", colors), False, False, 2)
+        rec = Gtk.Grid(row_spacing=2, column_spacing=2)
+        rec.set_valign(Gtk.Align.CENTER)
+        self.recent_swatches = []
+        for i in range(10):
+            fn = (lambda j=i: self.st.recent_colors[j] if j < len(self.st.recent_colors) else None)
+            sw = Swatch(16, fn, lambda button, f=fn: self._palette_click(f(), button))
+            sw.set_tooltip_text("Recent color\nA color you painted with lately. Click to use it again.")
+            rec.attach(sw, i % 5, i // 5, 1, 1)
+            self.recent_swatches.append(sw)
+        row.pack_start(group("Recent", rec), False, False, 2)
         return row
+
+    def refresh_recent(self):
+        for sw in self.recent_swatches:
+            sw.da.queue_draw()
 
     def _color_tip(self, i):
         names = ["Black", "Gray-50%", "Dark red", "Red", "Orange", "Yellow", "Green", "Turquoise", "Indigo", "Purple",
@@ -673,10 +732,21 @@ class Ribbon(Gtk.Box):
     def _size_key(self):
         return self.win.size_key()
 
+    def _sync_stab(self):
+        tool = self.st.tool
+        self.stab_box.set_visible(tool in STAB_TOOLS)
+        if tool in STAB_TOOLS:
+            self.stab_title.set_text("Stabilizer for the " + {"brush": "brushes"}.get(tool, tool))
+            old, self._sync = self._sync, True
+            for sc, v in zip(self.stab_scales, self.st.stabilizer[tool]):
+                sc.set_value(v)
+            self._sync = old
+
     def _fill_size_presets(self):
         for c in self.size_presets.get_children():
             c.destroy()
         key = self._size_key()
+        self._sync_stab()
         if key == "fill":
             self.size_caption.set_text("Fill tolerance (%)")
             self.size_scale.set_range(0, 100)
@@ -758,7 +828,8 @@ class Ribbon(Gtk.Box):
         sh.set_valign(Gtk.Align.CENTER)
         self.view_checks = {}
         for i, (key, label, tip) in enumerate((("rulers", "Rulers", "Rulers (Ctrl+R)"), ("grid", "Gridlines", "Gridlines (Ctrl+G)"),
-                                               ("statusbar", "Status bar", "Status bar"), ("layers", "Layers panel", "Layers panel (F7)"))):
+                                               ("statusbar", "Status bar", "Status bar"), ("layers", "Layers panel", "Layers panel (F7)"),
+                                               ("history", "History panel", "History panel (F8)\nEvery change since the picture was opened. Click one to go back to it."))):
             c = Gtk.CheckButton(label=label)
             c.get_style_context().add_class("fd-check")
             c.set_tooltip_text(tip)
@@ -876,21 +947,25 @@ class Ribbon(Gtk.Box):
         if st.tool == "brush":
             self.brush_btn.get_style_context().add_class("fd-on")
         self.select_btn.get_style_context().remove_class("fd-on")
-        if st.tool in ("select", "freeselect"):
+        if st.tool in SEL_TOOLS:
             self.select_btn.get_style_context().add_class("fd-on")
         for k, b in self.shape_buttons.items():
             b.set_active(st.tool == "shape" and st.shape == k)
         for n, b in self.well_buttons.items():
             b.set_active(st.active_well == n)
             b.well_da.queue_draw()
-        for sw in self.pal_swatches:
+        for sw in self.pal_swatches + self.recent_swatches:
             sw.da.queue_draw()
         shape_mode = st.tool == "shape"
         self.outline_btn.set_sensitive(shape_mode)
         self.fillmode_btn.set_sensitive(shape_mode)
-        self.size_btn.set_sensitive(st.tool not in ("text", "picker", "zoom", "select", "freeselect"))
+        self.size_btn.set_sensitive(st.tool not in ("text", "picker", "zoom") + SEL_TOOLS)
+        self._sync_stab()
         self.transparent_item.set_active(st.transparent_sel)
         self.sample_item.set_active(st.sample_all)
+        self.contig_item.set_active(st.wand_contiguous)
+        if st.wand_tolerance in self.tol_items:
+            self.tol_items[st.wand_tolerance].set_active(True)
         for k, c in self.view_checks.items():
             c.set_active(st.view[k])
         doc = self.win.doc

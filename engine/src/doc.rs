@@ -77,6 +77,8 @@ pub struct UndoStep {
     pub id: u64,
     pub kind: UndoKind,
     pub bytes: usize,
+    /// what the step did, for the History panel (set by the program after the step)
+    pub label: String,
 }
 
 pub struct OpState {
@@ -115,6 +117,9 @@ pub struct Doc {
     pub(crate) adj_open: bool,
     /// Copy, Transparent selection and Fill look at every visible layer, not the active one.
     pub sample_all: bool,
+    /// How the next selection combines with the current one: 0 replace, 1 add, 2 subtract,
+    /// 3 intersect. Reset to replace after each selection.
+    pub sel_mode: u8,
     stroke: Option<Stroke>,
     mask: Vec<u8>,
     pub changes: u64,
@@ -525,6 +530,7 @@ impl Doc {
             adj_float: None,
             adj_open: false,
             sample_all: false,
+            sel_mode: 0,
             stroke: None,
             mask: Vec::new(),
             changes: 0,
@@ -751,7 +757,7 @@ impl Doc {
     fn push_undo(&mut self, kind: UndoKind) -> u64 {
         let bytes = step_bytes(&kind);
         let id = self.new_step_id();
-        self.undo.push(UndoStep { id, kind, bytes });
+        self.undo.push(UndoStep { id, kind, bytes, label: String::new() });
         self.undo_bytes += bytes;
         self.redo.clear();
         self.changes += 1;
@@ -842,6 +848,20 @@ impl Doc {
         !self.redo.is_empty() && self.float.is_none()
     }
 
+    /// The steps that can be undone (oldest first) and redone (next first), by label.
+    pub fn history(&self) -> (Vec<&str>, Vec<&str>) {
+        (self.undo.iter().map(|s| s.label.as_str()).collect(), self.redo.iter().rev().map(|s| s.label.as_str()).collect())
+    }
+
+    /// Names the newest step if it has no name yet.
+    pub fn label_last(&mut self, label: &str) {
+        if let Some(s) = self.undo.last_mut() {
+            if s.label.is_empty() {
+                s.label = label.to_string();
+            }
+        }
+    }
+
     pub fn undo(&mut self) -> bool {
         self.finish_pending();
         if let Some(f) = self.float.take() {
@@ -861,7 +881,7 @@ impl Doc {
         self.undo_bytes -= s.bytes;
         let rev = self.apply_step(s.kind);
         let bytes = step_bytes(&rev);
-        self.redo.push(UndoStep { id: s.id, kind: rev, bytes });
+        self.redo.push(UndoStep { id: s.id, kind: rev, bytes, label: s.label });
         self.changes += 1;
         true
     }
@@ -875,7 +895,7 @@ impl Doc {
         let rev = self.apply_step(s.kind);
         let bytes = step_bytes(&rev);
         self.undo_bytes += bytes;
-        self.undo.push(UndoStep { id: s.id, kind: rev, bytes });
+        self.undo.push(UndoStep { id: s.id, kind: rev, bytes, label: s.label });
         self.changes += 1;
         true
     }
@@ -1026,6 +1046,35 @@ impl Doc {
         }
     }
 
+    /// A new selection mask, combined with the current selection by sel_mode.
+    fn set_sel(&mut self, m: Vec<u8>) {
+        let mode = std::mem::replace(&mut self.sel_mode, 0);
+        let out = match (mode, self.sel.take()) {
+            (1, Some(mut a)) => {
+                for (x, b) in a.iter_mut().zip(m.iter()) {
+                    *x = (*x).max(*b);
+                }
+                a
+            }
+            (2, Some(mut a)) => {
+                for (x, b) in a.iter_mut().zip(m.iter()) {
+                    *x = ((*x as u32 * (255 - *b as u32) + 127) / 255) as u8;
+                }
+                a
+            }
+            (2, None) => vec![0; self.w * self.h],
+            (3, Some(mut a)) => {
+                for (x, b) in a.iter_mut().zip(m.iter()) {
+                    *x = (*x).min(*b);
+                }
+                a
+            }
+            (3, None) => vec![0; self.w * self.h],
+            _ => m,
+        };
+        self.sel = if out.iter().any(|&v| v > 0) { Some(out) } else { None };
+    }
+
     pub fn sel_rect(&mut self, x: i64, y: i64, w: i64, h: i64) {
         self.commit_float();
         let mut m = vec![0u8; self.w * self.h];
@@ -1033,26 +1082,90 @@ impl Doc {
         let y0 = y.clamp(0, self.h as i64) as usize;
         let x1 = (x + w).clamp(0, self.w as i64) as usize;
         let y1 = (y + h).clamp(0, self.h as i64) as usize;
-        if x1 <= x0 || y1 <= y0 {
-            self.sel = None;
-            return;
+        if x1 > x0 && y1 > y0 {
+            for yy in y0..y1 {
+                m[yy * self.w + x0..yy * self.w + x1].fill(255);
+            }
         }
-        for yy in y0..y1 {
-            m[yy * self.w + x0..yy * self.w + x1].fill(255);
-        }
-        self.sel = Some(m);
+        self.set_sel(m);
     }
 
     pub fn sel_poly(&mut self, pts: &[Pt]) {
         self.commit_float();
         let mut m = vec![0u8; self.w * self.h];
         let cov = poly_coverage(&[pts.to_vec()], 0, 0, self.w, self.h, true);
-        let mut any = false;
         for (d, c) in m.iter_mut().zip(cov.iter()) {
             *d = (c * 255.0 + 0.5) as u8;
-            any |= *d > 0;
         }
-        self.sel = if any { Some(m) } else { None };
+        self.set_sel(m);
+    }
+
+    /// Magic wand: the pixels of about the colour at (x, y) — joined to it when contiguous,
+    /// anywhere on the layer (or the visible picture, with sample_all) otherwise. tol 0..255.
+    pub fn sel_magic(&mut self, x: i64, y: i64, tol: u8, contiguous: bool) {
+        self.commit_float();
+        let (w, h) = (self.w, self.h);
+        if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 || self.layers.is_empty() {
+            self.sel_mode = 0;
+            return;
+        }
+        let merged = if self.sample_all && self.layers.len() > 1 { Some(self.flatten_rgba()) } else { None };
+        let px: &[u8] = match &merged {
+            Some(v) => v,
+            None => &self.layers[self.active].px,
+        };
+        let pre = |p: &[u8]| -> [i32; 4] {
+            let a = p[3] as i32;
+            [p[0] as i32 * a / 255, p[1] as i32 * a / 255, p[2] as i32 * a / 255, a]
+        };
+        let target = pre(&px[(y as usize * w + x as usize) * 4..][..4]);
+        let tol = tol as i32;
+        let matches = |i: usize| -> bool {
+            let p = pre(&px[i * 4..i * 4 + 4]);
+            (0..4).all(|k| (p[k] - target[k]).abs() <= tol)
+        };
+        let mut m = vec![0u8; w * h];
+        if !contiguous {
+            for (i, v) in m.iter_mut().enumerate() {
+                if matches(i) {
+                    *v = 255;
+                }
+            }
+        } else {
+            let mut stack = vec![(x as usize, y as usize)];
+            while let Some((sx, sy)) = stack.pop() {
+                let row = sy * w;
+                if m[row + sx] != 0 || !matches(row + sx) {
+                    continue;
+                }
+                let mut l = sx;
+                while l > 0 && m[row + l - 1] == 0 && matches(row + l - 1) {
+                    l -= 1;
+                }
+                let mut r = sx;
+                while r + 1 < w && m[row + r + 1] == 0 && matches(row + r + 1) {
+                    r += 1;
+                }
+                m[row + l..=row + r].fill(255);
+                for ny in [sy.wrapping_sub(1), sy + 1] {
+                    if ny >= h {
+                        continue;
+                    }
+                    let nrow = ny * w;
+                    let mut i = l;
+                    while i <= r {
+                        if m[nrow + i] == 0 && matches(nrow + i) {
+                            stack.push((i, ny));
+                            while i <= r && m[nrow + i] == 0 && matches(nrow + i) {
+                                i += 1;
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+            }
+        }
+        self.set_sel(m);
     }
 
     /// Remove pixels close to `key` on the active layer from the selection
@@ -1084,6 +1197,48 @@ impl Doc {
         if m.iter().all(|&v| v == 0) {
             self.sel = None;
         }
+    }
+
+    /// The selection's outline as pixel-edge segments (x0, y0, x1, y1), runs joined, for drawing
+    /// marching ants round any shape of selection. Pixels at half coverage or more count.
+    pub fn sel_outline(&self) -> Vec<i32> {
+        let Some(m) = self.sel.as_ref() else { return Vec::new() };
+        let (w, h) = (self.w, self.h);
+        let on = |x: i64, y: i64| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && m[y as usize * w + x as usize] >= 128;
+        let mut out = Vec::new();
+        // horizontal edges: between row y-1 and row y
+        for y in 0..=h as i64 {
+            let mut x = 0i64;
+            while x < w as i64 {
+                if on(x, y - 1) != on(x, y) {
+                    let s = x;
+                    let up = on(x, y - 1);
+                    while x < w as i64 && on(x, y - 1) != on(x, y) && on(x, y - 1) == up {
+                        x += 1;
+                    }
+                    out.extend_from_slice(&[s as i32, y as i32, x as i32, y as i32]);
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        // vertical edges: between column x-1 and column x
+        for x in 0..=w as i64 {
+            let mut y = 0i64;
+            while y < h as i64 {
+                if on(x - 1, y) != on(x, y) {
+                    let s = y;
+                    let left = on(x - 1, y);
+                    while y < h as i64 && on(x - 1, y) != on(x, y) && on(x - 1, y) == left {
+                        y += 1;
+                    }
+                    out.extend_from_slice(&[x as i32, s as i32, x as i32, y as i32]);
+                } else {
+                    y += 1;
+                }
+            }
+        }
+        out
     }
 
     pub fn sel_all(&mut self) {
@@ -1287,10 +1442,12 @@ impl Doc {
         self.finish_pending();
         // fold a preceding "lift" into this step so move = one undo
         let mut tiles: HashMap<u32, Vec<u8>> = HashMap::new();
+        let mut carried = String::new();
         if let Some(id) = f.lifted {
             if self.undo.last().map(|s| s.id) == Some(id) {
                 let s = self.undo.pop().unwrap();
                 self.undo_bytes -= s.bytes;
+                carried = s.label.clone();
                 self.changes = self.changes.saturating_sub(1);
                 if let UndoKind::Tiles { tiles: t, .. } = s.kind {
                     tiles = t.into_iter().collect();
@@ -1325,8 +1482,13 @@ impl Doc {
             }
         }
         self.mark_dirty(fx0, fy0, fx1, fy1);
-        if self.op_end().is_none() {
-            // nothing changed (e.g. moved fully off-canvas with nothing lifted)
+        if self.op_end().is_some() {
+            let name = if !carried.is_empty() { carried } else if f.lifted.is_some() { "Move selection".into() } else { "Paste".into() };
+            if let Some(s) = self.undo.last_mut() {
+                if s.label.is_empty() {
+                    s.label = name;
+                }
+            }
         }
     }
 
@@ -2494,6 +2656,42 @@ fn step_bytes(k: &UndoKind) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn magic_wand_and_selection_modes() {
+        // left half red, right half blue, a red dot inside the blue
+        let (w, h) = (20usize, 10usize);
+        let mut px = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let c = if x < 10 || (x == 15 && y == 5) { [200, 20, 20, 255] } else { [20, 20, 200, 255] };
+                px[(y * w + x) * 4..][..4].copy_from_slice(&c);
+            }
+        }
+        let mut d = Doc::from_rgba(w, h, px, "t");
+        let count = |d: &Doc| d.sel.as_ref().map_or(0, |m| m.iter().filter(|&&v| v == 255).count());
+        d.sel_magic(2, 2, 10, true);
+        assert_eq!(count(&d), 100, "contiguous: the red half only");
+        d.sel_magic(2, 2, 10, false);
+        assert_eq!(count(&d), 101, "everywhere: the dot too");
+        d.sel_magic(18, 2, 10, true);
+        assert_eq!(count(&d), 99);
+        // add the red half to the blue
+        d.sel_mode = 1;
+        d.sel_magic(2, 2, 10, true);
+        assert_eq!(count(&d), 199);
+        // subtract a rectangle
+        d.sel_mode = 2;
+        d.sel_rect(0, 0, 20, 5);
+        assert_eq!(count(&d), 99, "rows 0-4 gone");
+        assert_eq!(d.sel_mode, 0, "the mode applies once");
+        // intersect
+        d.sel_all();
+        d.sel_mode = 3;
+        d.sel_rect(5, 0, 10, 10);
+        assert_eq!(count(&d), 100);
+    }
+
     use super::*;
     #[test]
     fn stroke_undo_redo() {

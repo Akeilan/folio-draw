@@ -11,12 +11,14 @@ gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
+from .tools import SEL_TOOLS
 from . import __version__
 from . import dialogs as D
 from . import engine as E
 from .canvas import ZOOM_STEPS, Canvas
 from .icons import Icon
 from .layers import LayersPanel
+from .history import HistoryPanel
 from .ribbon import Ribbon
 
 APP_NAME = "Folio Draw"
@@ -75,15 +77,17 @@ SEARCH_COMMANDS = [
     ("Brightness and contrast", ("adjust", "brightness"), ""), ("Hue and saturation", ("adjust", "huesat"), ""),
     ("Greyscale", ("greyscale",), ""), ("Sepia", ("sepia",), ""), ("Blur", ("adjust", "blur"), ""),
     ("Sharpen", ("adjust", "sharpen"), ""),
-    ("Edit colors", ("edit_colors",), ""),
+    ("Edit colors", ("edit_colors",), ""), ("Stabilizer", ("stabilizer_open",), ""),
     ("Pencil", ("tool", "pencil"), ""), ("Fill with color", ("tool", "fill"), ""), ("Text", ("tool", "text"), ""),
     ("Eraser", ("tool", "eraser"), ""), ("Color picker", ("tool", "picker"), ""), ("Magnifier", ("tool", "zoom"), ""),
     ("Brushes", ("tool", "brush"), ""), ("Rectangular selection", ("tool", "select"), ""),
-    ("Free-form selection", ("tool", "freeselect"), ""),
+    ("Free-form selection", ("tool", "freeselect"), ""), ("Polygon selection", ("tool", "polyselect"), ""),
+    ("Magic wand", ("tool", "wand"), ""),
     ("Zoom in", ("zoom_in",), "Ctrl+Page Up"), ("Zoom out", ("zoom_out",), "Ctrl+Page Down"),
     ("Zoom to 100%", ("zoom_100",), "Ctrl+1"), ("Fit to window", ("zoom_fit",), "Ctrl+0"),
     ("Rulers", ("view_toggle", "rulers"), "Ctrl+R"), ("Gridlines", ("view_toggle", "grid"), "Ctrl+G"),
     ("Status bar", ("view_toggle", "statusbar"), ""), ("Layers panel", ("view_toggle", "layers"), "F7"),
+    ("History panel", ("view_toggle", "history"), "F8"),
     ("Full screen", ("fullscreen",), "F11"),
     ("New layer", ("layer_add",), "Ctrl+Shift+N"), ("Duplicate layer", ("layer_dup",), "Ctrl+Shift+D"),
     ("Delete layer", ("layer_delete",), ""), ("Merge layer down", ("layer_merge",), "Ctrl+M"),
@@ -91,6 +95,15 @@ SEARCH_COMMANDS = [
     ("Frames view", ("frames_view",), ""), ("Play animation", ("play",), "Space"),
     ("About Folio Draw", ("about",), ""),
 ]
+
+
+# what each command and tool is called in the History panel
+CMD_LABELS = {tuple(cmd): label for label, cmd, _ in SEARCH_COMMANDS}
+CMD_LABELS.update({("delete",): "Delete", ("cut",): "Cut", ("paste",): "Paste", ("crop",): "Crop",
+                   ("layer_add",): "New layer", ("adjust",): "Adjustment"})
+TOOL_LABELS = {"pencil": "Pencil", "brush": "Brush", "eraser": "Eraser", "fill": "Fill with color", "text": "Text",
+               "shape": "Shape", "select": "Move selection", "freeselect": "Move selection",
+               "polyselect": "Move selection", "wand": "Move selection"}
 
 
 class State:
@@ -109,8 +122,12 @@ class State:
         self.fill_shape = False
         self.transparent_sel = False
         self.sample_all = False
+        self.wand_tolerance = 25        # percent
+        self.wand_contiguous = True
         self.page = {}                  # Page setup (see pagesetup.DEFAULTS)
-        self.view = {"rulers": False, "grid": False, "statusbar": True, "layers": True}
+        self.view = {"rulers": False, "grid": False, "statusbar": True, "layers": True, "history": False}
+        self.recent_colors = []         # the last colours painted with, newest first
+        self.stabilizer = {t: [0, 0, 0] for t in ("pencil", "brush", "eraser")}  # StreamLine, Stabilization, Motion filtering
         self.font_family = "Sans"
         self.font_size = 14.0
         self.bold = self.italic = self.underline = self.strike = False
@@ -119,7 +136,7 @@ class State:
         self.qat = ["save", "undo", "redo"]
 
     KEYS = ["brush", "shape", "color1", "color2", "custom_colors", "sizes", "tolerance", "outline", "fill_shape",
-            "transparent_sel", "sample_all", "page", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
+            "transparent_sel", "sample_all", "wand_tolerance", "wand_contiguous", "recent_colors", "stabilizer", "page", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
 
     def load(self):
         try:
@@ -146,6 +163,14 @@ class State:
                     v = base
                 elif k == "recent":
                     v = [p for p in v if isinstance(p, str)][:10]
+                elif k == "stabilizer":
+                    base = {t: list(vs) for t, vs in self.stabilizer.items()}
+                    for t, vs in (v.items() if isinstance(v, dict) else ()):
+                        if t in base and isinstance(vs, list) and len(vs) == 3:
+                            base[t] = [max(0, min(100, int(x))) for x in vs]
+                    v = base
+                elif k == "recent_colors":
+                    v = [tuple(c) for c in v if isinstance(c, (list, tuple)) and len(c) == 4][:10]
                 elif k == "qat":
                     v = [c for c in v if c in QAT_COMMANDS]
                 setattr(self, k, v)
@@ -170,6 +195,7 @@ class Window(Gtk.ApplicationWindow):
         self.state = State()
         self.state.load()
         self.doc = None
+        self._action = None
         self.path = None
         self.saved_changes = 0
         self.saved_at = None
@@ -231,7 +257,11 @@ class Window(Gtk.ApplicationWindow):
         mid.pack_start(self.canvas, True, True, 0)
         self.layers = LayersPanel(self)
         self.layers.set_hexpand(False)
-        mid.pack_start(self.layers, False, False, 0)
+        self.history = HistoryPanel(self)
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.pack_start(self.layers, True, True, 0)
+        side.pack_start(self.history, False, False, 0)
+        mid.pack_start(side, False, False, 0)
         root.pack_start(mid, True, True, 0)
         root.pack_start(self._status_bar(), False, False, 0)
 
@@ -480,6 +510,12 @@ class Window(Gtk.ApplicationWindow):
         doc = self.doc
         if doc is None:
             return
+        # name a new step after what made it
+        undo, _ = doc.history()
+        if undo and not undo[-1]:
+            doc.label_last(self._action or TOOL_LABELS.get(self.state.tool, "Edit"))
+        self._action = None
+        self.history.refresh()
         busy = self.canvas.pending is not None or self.canvas.text is not None
         self.qa_buttons["undo"].set_sensitive(doc.can_undo() or busy)
         self.qa_buttons["redo"].set_sensitive(doc.can_redo() and not busy)
@@ -500,7 +536,7 @@ class Window(Gtk.ApplicationWindow):
     def set_tool(self, tool):
         st = self.state
         self.finalize_pending()
-        if tool not in ("select", "freeselect") and self.doc is not None:
+        if tool not in SEL_TOOLS and self.doc is not None:
             if self.doc.float_rect():
                 self.doc.float_commit()
             if self.doc.sel_bounds():
@@ -825,10 +861,31 @@ class Window(Gtk.ApplicationWindow):
         m.popup_at_pointer(ev)
 
     # ------------------------------------------------------------------ commands
+    def c_stabilizer(self, i, v):
+        st = self.state
+        if st.tool in st.stabilizer:
+            st.stabilizer[st.tool][i] = max(0, min(100, int(v)))
+            st.save()
+
+    def c_stabilizer_open(self):
+        if self.state.tool not in self.state.stabilizer:
+            self.set_tool("brush")
+        self.ribbon.show_tab("home")
+        self.ribbon.size_btn.set_active(True)
+
+    def note_color(self, c):
+        """A colour was painted with: it goes to the front of the Recent colours."""
+        c = tuple(c)
+        r = [x for x in self.state.recent_colors if tuple(x) != c]
+        self.state.recent_colors = [c] + r[:9]
+        self.ribbon.refresh_recent()
+
     def cmd(self, name, *args):
         fn = getattr(self, "c_" + name, None)
         if fn is None:
             return
+        if name not in ("undo", "redo"):
+            self._action = CMD_LABELS.get((name,) + tuple(args)) or CMD_LABELS.get((name,)) or name.replace("_", " ").capitalize()
         if self.playing and name not in PLAYBACK_SAFE:
             self.stop_playback()
         fn(*args)
@@ -983,7 +1040,7 @@ class Window(Gtk.ApplicationWindow):
         y = max(0, min(int(vy), doc.height - h)) if h <= doc.height else 0
         doc.float_from_rgba(w, h, data, x, y)
         self.canvas.sel_path = None
-        if self.state.tool not in ("select", "freeselect"):
+        if self.state.tool not in SEL_TOOLS:
             self.state.prev_tool = self.state.tool
             self.state.tool = "select"
         self.canvas.sync()
@@ -992,7 +1049,7 @@ class Window(Gtk.ApplicationWindow):
     # ---- selection
     def c_select_all(self):
         self.finalize_pending()
-        if self.state.tool not in ("select", "freeselect"):
+        if self.state.tool not in SEL_TOOLS:
             self.state.tool = "select"
         self.doc.sel_all()
         self.canvas.sel_path = None
@@ -1000,7 +1057,7 @@ class Window(Gtk.ApplicationWindow):
 
     def c_invert_selection(self):
         self.finalize_pending()
-        if self.state.tool not in ("select", "freeselect"):
+        if self.state.tool not in SEL_TOOLS:
             self.state.tool = "select"
         self.doc.sel_invert()
         self.canvas.sel_path = None
@@ -1013,6 +1070,16 @@ class Window(Gtk.ApplicationWindow):
         if self.state.transparent_sel and self.doc.float_rect():
             self.doc.float_color_key(self.state.color2, 0)
             self.canvas.sync()
+
+    def c_wand_tolerance(self, pct):
+        self.state.wand_tolerance = max(0, min(100, int(pct)))
+        self.state.save()
+        self.ribbon.refresh()
+
+    def c_toggle_wand_contiguous(self, on=None):
+        self.state.wand_contiguous = (not self.state.wand_contiguous) if on is None else bool(on)
+        self.state.save()
+        self.ribbon.refresh()
 
     def c_toggle_sample_all(self, on=None):
         self.state.sample_all = (not self.state.sample_all) if on is None else bool(on)
@@ -1312,6 +1379,8 @@ class Window(Gtk.ApplicationWindow):
         self.layers.set_visible(v["layers"])
         if v["layers"]:
             self.layers.refresh()
+        self.history.set_visible(v.get("history", False))
+        self.history.refresh(force=True)
         self.canvas.area.queue_draw()
 
     # ---- animation
@@ -1566,11 +1635,22 @@ class Window(Gtk.ApplicationWindow):
         if name == "f7":
             self.cmd("view_toggle", "layers")
             return True
+        if name == "f8":
+            self.cmd("view_toggle", "history")
+            return True
         if name == "f4":
             self.cmd("layer_props")
             return True
         if name == "delete":
             self.cmd("delete")
+            return True
+        if name == "backspace" and cv.polysel is not None:
+            # take back the last point of the polygon selection
+            if len(cv.polysel["pts"]) > 1:
+                cv.polysel["pts"].pop()
+            else:
+                cv.polysel = None
+            cv.area.queue_draw()
             return True
         if name == "escape":
             if self.fullscreen_on and cv.drag is None and cv.pending is None and not self.doc.sel_bounds() and not self.doc.float_rect():
@@ -1587,7 +1667,7 @@ class Window(Gtk.ApplicationWindow):
         arrows = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
         if name in arrows and focus is cv.area:
             dx, dy = arrows[name]
-            if self.state.tool in ("select", "freeselect", "shape"):
+            if self.state.tool in SEL_TOOLS + ("shape",):
                 if cv.nudge(dx * (10 if shift else 1), dy * (10 if shift else 1)):
                     return True
             cv.hadj.set_value(cv.hadj.get_value() + dx * 40)

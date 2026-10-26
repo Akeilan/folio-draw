@@ -2,7 +2,7 @@
 
 import ctypes
 import os
-from ctypes import POINTER, c_char_p, c_float, c_int, c_uint, c_uint64, c_void_p, c_ubyte
+from ctypes import POINTER, create_string_buffer, c_char_p, c_float, c_int, c_uint, c_uint64, c_void_p, c_ubyte
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CANDIDATES = [
@@ -73,6 +73,11 @@ _sig("fd_adjust_end", None, _P)
 _sig("fd_adjust_cancel", None, _P)
 _sig("fd_sel_rect", None, _P, c_int, c_int, c_int, c_int)
 _sig("fd_sel_poly", None, _P, POINTER(c_float), c_uint)
+_sig("fd_sel_set_mode", None, _P, c_uint)
+_sig("fd_history", c_uint, _P, c_char_p, c_uint)
+_sig("fd_label_last", None, _P, c_char_p)
+_sig("fd_sel_outline", c_uint, _P, POINTER(c_int), c_uint)
+_sig("fd_sel_magic", None, _P, c_int, c_int, c_uint, c_int)
 _sig("fd_sel_all", None, _P)
 _sig("fd_sel_exclude_color", None, _P, c_uint, c_uint)
 _sig("fd_sel_none", None, _P)
@@ -240,6 +245,18 @@ class Document:
         return any(a != 255 for a in data[3::4])
 
     # ---- undo / ops
+    def history(self):
+        """([undo labels, oldest first], [redo labels, next first])."""
+        n = L.fd_history(self.h, None, 0)
+        buf = create_string_buffer(n + 1)
+        L.fd_history(self.h, buf, n)
+        lines = buf.raw[:n].decode("utf-8", "replace").split("\n")
+        i = lines.index("--")
+        return lines[:i], lines[i + 1:-1]
+
+    def label_last(self, label):
+        L.fd_label_last(self.h, label.encode("utf-8"))
+
     def undo(self):
         return bool(L.fd_undo(self.h))
 
@@ -317,6 +334,25 @@ class Document:
     def sel_poly(self, points):
         arr, n = _floats(points)
         L.fd_sel_poly(self.h, arr, n)
+
+    # how the next selection combines with the current one
+    SEL_REPLACE, SEL_ADD, SEL_SUBTRACT, SEL_INTERSECT = range(4)
+
+    def sel_outline(self):
+        """Edge segments [(x0, y0, x1, y1), ...] round the selection."""
+        n = L.fd_sel_outline(self.h, None, 0)
+        if not n:
+            return []
+        buf = (c_int * n)()
+        L.fd_sel_outline(self.h, buf, n)
+        v = list(buf)
+        return [tuple(v[i:i + 4]) for i in range(0, n, 4)]
+
+    def sel_set_mode(self, mode):
+        L.fd_sel_set_mode(self.h, int(mode))
+
+    def sel_magic(self, x, y, tol=32, contiguous=True):
+        L.fd_sel_magic(self.h, int(x), int(y), int(tol), 1 if contiguous else 0)
 
     def sel_exclude_color(self, color, tol=0):
         L.fd_sel_exclude_color(self.h, pack(color), tol)

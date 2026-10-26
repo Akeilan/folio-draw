@@ -96,6 +96,70 @@ def i_freeselect(cr, ink, acc):
     cr.set_dash([])
 
 
+def i_polyselect(cr, ink, acc):
+    pts = [(4, 18), (6, 5), (14, 9), (20, 4), (19, 19)]
+    cr.set_dash([2, 2])
+    cr.set_source_rgb(*ink)
+    cr.move_to(*pts[0])
+    for q in pts[1:]:
+        cr.line_to(*q)
+    cr.close_path()
+    cr.stroke()
+    cr.set_dash([])
+    cr.set_source_rgb(*acc)
+    for q in pts:
+        cr.rectangle(q[0] - 1.5, q[1] - 1.5, 3, 3)
+    cr.fill()
+
+
+def i_wand(cr, ink, acc):
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(2.2)
+    cr.move_to(4, 20)
+    cr.line_to(14, 10)
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    # the star at the tip
+    cx, cy, r1, r2 = 17, 7, 5, 2
+    for k in range(10):
+        a = -math.pi / 2 + k * math.pi / 5
+        r = r1 if k % 2 == 0 else r2
+        (cr.move_to if k == 0 else cr.line_to)(cx + r * math.cos(a), cy + r * math.sin(a))
+    cr.close_path()
+    cr.fill()
+
+
+def i_history(cr, ink, acc):
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1.6)
+    cr.arc(12, 12, 8, -math.pi * 0.85, math.pi * 0.95)
+    cr.stroke()
+    cr.move_to(3, 5)
+    cr.line_to(4.6, 10.4)
+    cr.line_to(9.5, 8.5)
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    cr.set_line_width(1.8)
+    cr.move_to(12, 7)
+    cr.line_to(12, 12)
+    cr.line_to(15.5, 14)
+    cr.stroke()
+
+
+def i_stabilizer(cr, ink, acc):
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1)
+    cr.move_to(3, 17)
+    for i in range(1, 19):
+        cr.line_to(3 + i, 17 - i * 0.55 + (1.6 if i % 2 else -1.6))
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    cr.set_line_width(2.2)
+    cr.move_to(3, 15)
+    cr.curve_to(9, 13, 14, 9, 21, 5)
+    cr.stroke()
+
+
 def i_crop(cr, ink, acc):
     cr.set_source_rgb(*ink)
     cr.set_line_width(2)

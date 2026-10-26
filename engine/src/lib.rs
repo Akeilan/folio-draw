@@ -374,6 +374,39 @@ pub unsafe extern "C" fn fd_flatten_rgba(p: *mut Doc, out: *mut u8) {
 
 // ------------------------------------------------------------------ undo
 
+/// The history as text: undo labels oldest first, then a line "--", then redo labels next
+/// first, one per line. Returns the byte length; writes up to cap bytes when out isn't null.
+#[no_mangle]
+pub unsafe extern "C" fn fd_history(p: *mut Doc, out: *mut u8, cap: u32) -> u32 {
+    guard(0, || {
+        let Some(doc) = d(p) else { return 0 };
+        let (u, r) = doc.history();
+        let mut s = String::new();
+        for l in u {
+            s.push_str(&l.replace('\n', " "));
+            s.push('\n');
+        }
+        s.push_str("--\n");
+        for l in r {
+            s.push_str(&l.replace('\n', " "));
+            s.push('\n');
+        }
+        if !out.is_null() {
+            let n = s.len().min(cap as usize);
+            std::ptr::copy_nonoverlapping(s.as_ptr(), out, n);
+        }
+        s.len() as u32
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_label_last(p: *mut Doc, label: *const c_char) {
+    let label = cstr(label);
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.label_last(&label)
+        }
+    })
+}
 #[no_mangle]
 pub unsafe extern "C" fn fd_undo(p: *mut Doc) -> i32 {
     guard(0, || d(p).map_or(0, |d| d.undo() as i32))
@@ -542,6 +575,35 @@ pub unsafe extern "C" fn fd_sel_rect(p: *mut Doc, x: i32, y: i32, w: i32, h: i32
     guard((), || {
         if let Some(doc) = d(p) {
             doc.sel_rect(x as i64, y as i64, w as i64, h as i64)
+        }
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_sel_set_mode(p: *mut Doc, mode: u32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.sel_mode = mode.min(3) as u8;
+        }
+    })
+}
+/// Writes up to `cap` ints of the selection outline into out; returns how many there are.
+#[no_mangle]
+pub unsafe extern "C" fn fd_sel_outline(p: *mut Doc, out: *mut i32, cap: u32) -> u32 {
+    guard(0, || {
+        let Some(doc) = d(p) else { return 0 };
+        let v = doc.sel_outline();
+        if !out.is_null() {
+            let n = v.len().min(cap as usize);
+            std::ptr::copy_nonoverlapping(v.as_ptr(), out, n);
+        }
+        v.len() as u32
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_sel_magic(p: *mut Doc, x: i32, y: i32, tol: u32, contiguous: i32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.sel_magic(x as i64, y as i64, tol.min(255) as u8, contiguous != 0)
         }
     })
 }
