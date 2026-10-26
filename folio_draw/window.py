@@ -38,6 +38,49 @@ OPEN_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.bmp", "*.dib"
 PLAYBACK_SAFE = {"play", "zoom_in", "zoom_out", "zoom_100", "zoom_fit", "view_toggle", "fullscreen", "gif_loop", "about"}
 FLAT_ALPHA_FORMATS = {E.FMT_PNG, E.FMT_ORA, E.FMT_GIF, E.FMT_GIF_ANIM}
 
+# Quick Access Toolbar: command -> (icon, tooltip), in menu order
+QAT_COMMANDS = {
+    "new": ("new", "New (Ctrl+N)"),
+    "open": ("open", "Open (Ctrl+O)"),
+    "save": ("save", "Save (Ctrl+S)"),
+    "undo": ("undo", "Undo (Ctrl+Z)"),
+    "redo": ("redo", "Redo (Ctrl+Y)"),
+    "print": ("print", "Print (Ctrl+P)"),
+}
+QAT_NAMES = {"new": "New", "open": "Open", "save": "Save", "undo": "Undo", "redo": "Redo", "print": "Print"}
+
+# what the search box (Alt+Q) finds: label, command (with arguments), shortcut
+SEARCH_COMMANDS = [
+    ("New picture", ("new",), "Ctrl+N"), ("New transparent picture", ("new_transparent",), ""),
+    ("Open", ("open",), "Ctrl+O"), ("Save", ("save",), "Ctrl+S"), ("Save as", ("save_as",), "F12"),
+    ("Print", ("print",), "Ctrl+P"), ("Set as desktop background", ("wallpaper",), ""),
+    ("Image properties", ("properties",), "Ctrl+E"), ("Close picture", ("close",), ""),
+    ("Undo", ("undo",), "Ctrl+Z"), ("Redo", ("redo",), "Ctrl+Y"),
+    ("Cut", ("cut",), "Ctrl+X"), ("Copy", ("copy",), "Ctrl+C"), ("Paste", ("paste",), "Ctrl+V"),
+    ("Paste as new layer", ("paste_layer",), "Ctrl+Shift+V"), ("Paste from file", ("paste_from",), ""),
+    ("Select all", ("select_all",), "Ctrl+A"), ("Invert selection", ("invert_selection",), ""),
+    ("Delete selection", ("delete",), "Delete"), ("Crop", ("crop",), "Ctrl+Shift+X"),
+    ("Resize and skew", ("resize",), "Ctrl+W"), ("Rotate right 90°", ("rot_cw",), ""),
+    ("Rotate left 90°", ("rot_ccw",), ""), ("Rotate 180°", ("rot_180",), ""),
+    ("Rotate by angle", ("rotate_angle",), "Ctrl+Shift+R"), ("Flip horizontal", ("flip_h",), ""),
+    ("Flip vertical", ("flip_v",), ""), ("Invert colors", ("invert_colors",), "Ctrl+Shift+I"),
+    ("Edit colors", ("edit_colors",), ""),
+    ("Pencil", ("tool", "pencil"), ""), ("Fill with color", ("tool", "fill"), ""), ("Text", ("tool", "text"), ""),
+    ("Eraser", ("tool", "eraser"), ""), ("Color picker", ("tool", "picker"), ""), ("Magnifier", ("tool", "zoom"), ""),
+    ("Brushes", ("tool", "brush"), ""), ("Rectangular selection", ("tool", "select"), ""),
+    ("Free-form selection", ("tool", "freeselect"), ""),
+    ("Zoom in", ("zoom_in",), "Ctrl+Page Up"), ("Zoom out", ("zoom_out",), "Ctrl+Page Down"),
+    ("Zoom to 100%", ("zoom_100",), "Ctrl+1"), ("Fit to window", ("zoom_fit",), "Ctrl+0"),
+    ("Rulers", ("view_toggle", "rulers"), "Ctrl+R"), ("Gridlines", ("view_toggle", "grid"), "Ctrl+G"),
+    ("Status bar", ("view_toggle", "statusbar"), ""), ("Layers panel", ("view_toggle", "layers"), "F7"),
+    ("Full screen", ("fullscreen",), "F11"),
+    ("New layer", ("layer_add",), "Ctrl+Shift+N"), ("Duplicate layer", ("layer_dup",), "Ctrl+Shift+D"),
+    ("Delete layer", ("layer_delete",), ""), ("Merge layer down", ("layer_merge",), "Ctrl+M"),
+    ("Flatten image", ("flatten",), ""), ("Layer properties", ("layer_props",), "F4"),
+    ("Frames view", ("frames_view",), ""), ("Play animation", ("play",), "Space"),
+    ("About Folio Draw", ("about",), ""),
+]
+
 
 class State:
     def __init__(self):
@@ -60,9 +103,10 @@ class State:
         self.bold = self.italic = self.underline = self.strike = False
         self.text_opaque = False
         self.recent = []
+        self.qat = ["save", "undo", "redo"]
 
     KEYS = ["brush", "shape", "color1", "color2", "custom_colors", "sizes", "tolerance", "outline", "fill_shape",
-            "transparent_sel", "view", "font_family", "font_size", "text_opaque", "recent"]
+            "transparent_sel", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
 
     def load(self):
         try:
@@ -89,6 +133,8 @@ class State:
                     v = base
                 elif k == "recent":
                     v = [p for p in v if isinstance(p, str)][:10]
+                elif k == "qat":
+                    v = [c for c in v if c in QAT_COMMANDS]
                 setattr(self, k, v)
             except (TypeError, ValueError, AttributeError):
                 pass
@@ -118,30 +164,52 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(1200, 800)
         self.set_icon_name("folio-draw")
 
-        # ---- title bar (quick access toolbar)
+        # ---- title bar: Quick Access on the left, title in the middle, search and window buttons right
         hb = Gtk.HeaderBar()
         hb.set_show_close_button(True)
+        hb.set_decoration_layout(":minimize,maximize,close")
         hb.get_style_context().add_class("fd-header")
-        qa = Gtk.Box(spacing=0)
-        app_icon = Gtk.Image.new_from_icon_name("folio-draw", Gtk.IconSize.MENU)
-        qa.pack_start(app_icon, False, False, 4)
+        self.qat_box = Gtk.Box(spacing=0)
         self.qa_buttons = {}
-        for icon, tip, cmd in (("save", "Save (Ctrl+S)", "save"), ("undo", "Undo (Ctrl+Z)", "undo"), ("redo", "Redo (Ctrl+Y)", "redo")):
+        for cmd, (icon, tip) in QAT_COMMANDS.items():
             b = Gtk.Button()
             b.add(Icon(icon, 16, on_dark=True))
             b.set_tooltip_text(tip)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.connect("clicked", lambda _b, c=cmd: self.cmd(c))
-            qa.pack_start(b, False, False, 0)
+            b.set_no_show_all(True)
+            b.get_child().show()
+            self.qat_box.pack_start(b, False, False, 0)
             self.qa_buttons[cmd] = b
-        hb.pack_start(qa)
+        self.qat_menu_btn = Gtk.MenuButton()
+        self.qat_menu_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self.qat_menu_btn.set_tooltip_text("Customize Quick Access Toolbar")
+        self.qat_menu_btn.add(Gtk.Label(label="▾"))
+        self.qat_menu = Gtk.Menu()
+        self.qat_menu_btn.set_popup(self.qat_menu)
+        self.qat_menu.connect("show", lambda *_: self._build_qat_menu())
+        self.qat_box.pack_start(self.qat_menu_btn, False, False, 0)
+        hb.pack_start(self.qat_box)
         self.title_label = Gtk.Label()
         hb.set_custom_title(self.title_label)
+        self.search = Gtk.SearchEntry()
+        self.search.get_style_context().add_class("fd-search")
+        self.search.set_placeholder_text("Search (Alt+Q)")
+        self.search.set_size_request(240, -1)
+        self.search.set_valign(Gtk.Align.CENTER)
+        self._setup_search()
+        hb.pack_end(self.search)
         self.set_titlebar(hb)
         self.headerbar = hb
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(root)
+        # the window body: the document view, or the File view over it; KeyTips float above both
+        self.body = Gtk.Stack()
+        self.body.set_transition_type(Gtk.StackTransitionType.NONE)
+        self.body.add_named(root, "main")
+        self.overlay = Gtk.Overlay()
+        self.overlay.add(self.body)
+        self.add(self.overlay)
         self.canvas = Canvas(self)
         self.ribbon = Ribbon(self)
         self.ribbon.set_vexpand(False)
@@ -168,7 +236,17 @@ class Window(Gtk.ApplicationWindow):
         self.drag_dest_add_uri_targets()
         self.connect("drag-data-received", self._drop)
 
+        from .backstage import Backstage
+        from .keytips import KeyTips
+        self.backstage = Backstage(self)
+        self.body.add_named(self.backstage, "backstage")
+        self.keytips = KeyTips(self)
+        self._alt_alone = False
+        self.connect("key-release-event", self._key_release)
+        self.connect("button-press-event", lambda *_: (self.keytips.leave() if self.keytips.active else None, False)[1])
         self.show_all()
+        self.body.set_visible_child_name("main")
+        self._apply_qat()
         self.ribbon.tab_buttons["text"].hide()
         if path:
             if not self.open_path(path, ask=False):
@@ -180,6 +258,115 @@ class Window(Gtk.ApplicationWindow):
         self.canvas.area.grab_focus()
 
     # ------------------------------------------------------------------ status bar
+    # ------------------------------------------------------------------ Quick Access, search, File view
+    def qat_order(self):
+        return [c for c in QAT_COMMANDS if c in self.state.qat]
+
+    def _apply_qat(self):
+        for cmd, b in self.qa_buttons.items():
+            b.set_visible(cmd in self.state.qat)
+
+    def _build_qat_menu(self):
+        for c in self.qat_menu.get_children():
+            self.qat_menu.remove(c)
+        title = Gtk.MenuItem(label="Customize Quick Access Toolbar")
+        title.set_sensitive(False)
+        self.qat_menu.append(title)
+        for cmd in QAT_COMMANDS:
+            mi = Gtk.CheckMenuItem(label=QAT_NAMES[cmd])
+            mi.set_active(cmd in self.state.qat)
+            mi.connect("toggled", lambda m, c=cmd: self.set_qat(c, m.get_active()))
+            self.qat_menu.append(mi)
+        self.qat_menu.show_all()
+
+    def set_qat(self, cmd, on):
+        q = [c for c in self.state.qat if c != cmd]
+        if on:
+            q.append(cmd)
+        self.state.qat = [c for c in QAT_COMMANDS if c in q]
+        self.state.save()
+        self._apply_qat()
+
+    def _setup_search(self):
+        store = Gtk.ListStore(str, str, int)
+        for i, (label, _cmd, keys) in enumerate(SEARCH_COMMANDS):
+            store.append([label, keys, i])
+        comp = Gtk.EntryCompletion()
+        comp.set_model(store)
+        comp.set_text_column(0)
+        comp.set_inline_completion(False)
+        comp.set_popup_completion(True)
+        comp.set_minimum_key_length(1)
+
+        def match(c, key, it):
+            return key.lower() in store[it][0].lower()
+        comp.set_match_func(match)
+        keys = Gtk.CellRendererText()
+        keys.set_property("foreground", "#777777")
+        comp.pack_end(keys, False)
+        comp.add_attribute(keys, "text", 1)
+        comp.connect("match-selected", lambda c, m, it: (self.run_search(m[it][2]), True)[1])
+        self.search.set_completion(comp)
+        self.search.connect("activate", lambda e: self.run_search(self.search_matches(e.get_text())[0] if self.search_matches(e.get_text()) else None))
+        self.search.connect("key-press-event", self._search_key)
+
+    def search_matches(self, text):
+        t = (text or "").strip().lower()
+        if not t:
+            return []
+        starts = [i for i, c in enumerate(SEARCH_COMMANDS) if c[0].lower().startswith(t)]
+        rest = [i for i, c in enumerate(SEARCH_COMMANDS) if t in c[0].lower() and i not in starts]
+        return starts + rest
+
+    def run_search(self, index):
+        if index is None:
+            return
+        self.search.set_text("")
+        self.canvas.area.grab_focus()
+        cmd = SEARCH_COMMANDS[index][1]
+        if cmd[0] == "tool":
+            self.set_tool(cmd[1])
+            self.ribbon.refresh()
+        elif cmd[0] == "view_toggle":
+            self.cmd("view_toggle", cmd[1])
+        else:
+            self.cmd(*cmd)
+
+    def _search_key(self, w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            self.search.set_text("")
+            self.canvas.area.grab_focus()
+            return True
+        return False
+
+    def show_backstage(self, page="home"):
+        self.keytips.leave()
+        self.finalize_pending()
+        self.body.set_visible_child_name("backstage")
+        self.backstage.nav(page)
+
+    def hide_backstage(self):
+        self.body.set_visible_child_name("main")
+        self.canvas.area.grab_focus()
+
+    def backstage_open(self):
+        return self.body.get_visible_child_name() == "backstage"
+
+    def c_close(self):
+        if self.confirm_discard():
+            self.new_document()
+
+    def _key_release(self, w, ev):
+        name = (Gdk.keyval_name(ev.keyval) or "").lower()
+        if name in ("alt_l", "alt_r") and self._alt_alone and not self.backstage_open():
+            self._alt_alone = False
+            if self.keytips.active:
+                self.keytips.leave()
+            else:
+                self.keytips.start()
+            return True
+        return False
+
     def _status_bar(self):
         sb = Gtk.Box(spacing=18)
         sb.get_style_context().add_class("fd-status")
@@ -593,48 +780,6 @@ class Window(Gtk.ApplicationWindow):
         self.fullscreen_on = bool(ev.new_window_state & Gdk.WindowState.FULLSCREEN)
 
     # ------------------------------------------------------------------ File menu
-    def build_file_menu(self, menu):
-        for c in menu.get_children():
-            menu.remove(c)
-        from .ribbon import menu_item
-
-        def add(label, icon, cb, accel=None):
-            menu.append(menu_item(label, icon, cb, accel))
-
-        add("New", "new", lambda: self.cmd("new"), "Ctrl+N")
-        add("New transparent picture", "transparent", lambda: self.cmd("new_transparent"))
-        add("Open…", "open", lambda: self.cmd("open"), "Ctrl+O")
-        add("Save", "save", lambda: self.cmd("save"), "Ctrl+S")
-        save_as = Gtk.MenuItem()
-        row = Gtk.Box(spacing=8)
-        row.pack_start(Icon("save", 16), False, False, 0)
-        row.pack_start(Gtk.Label(label="Save as", xalign=0), True, True, 0)
-        save_as.add(row)
-        sub = Gtk.Menu()
-        for e, label in ((".png", "PNG picture"), (".jpg", "JPEG picture"), (".bmp", "BMP picture"),
-                         (".gif", "GIF picture"), (".ora", "OpenRaster (keeps layers)")):
-            sub.append(menu_item(label, None, lambda e=e: self.cmd("save_as", e)))
-        sub.append(Gtk.SeparatorMenuItem())
-        sub.append(menu_item("Other formats…", None, lambda: self.cmd("save_as"), "F12"))
-        save_as.set_submenu(sub)
-        menu.append(save_as)
-        menu.append(Gtk.SeparatorMenuItem())
-        add("Print…", "print", lambda: self.cmd("print"), "Ctrl+P")
-        add("Set as desktop background", "wallpaper", lambda: self.cmd("wallpaper"))
-        add("Image properties", "props", lambda: self.cmd("properties"), "Ctrl+E")
-        if self.state.recent:
-            menu.append(Gtk.SeparatorMenuItem())
-            rec = Gtk.MenuItem(label="Recent pictures")
-            rs = Gtk.Menu()
-            for i, p in enumerate(self.state.recent):
-                rs.append(menu_item("%d  %s" % (i + 1, os.path.basename(p)), None, lambda p=p: self.open_path(p)))
-            rec.set_submenu(rs)
-            menu.append(rec)
-        menu.append(Gtk.SeparatorMenuItem())
-        add("About Folio Draw", "info", lambda: self.cmd("about"))
-        add("Exit", "exit", lambda: self.cmd("exit"), "Alt+F4")
-        menu.show_all()
-
     def popup_selection_menu(self, ev):
         from .ribbon import make_menu
         has = bool(self.doc.sel_bounds() or self.doc.float_rect())
@@ -1264,6 +1409,24 @@ class Window(Gtk.ApplicationWindow):
         ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
         alt = bool(ev.state & Gdk.ModifierType.MOD1_MASK)
+        # a lone tap of Alt shows KeyTips (on release); any other key in between cancels that
+        self._alt_alone = name in ("alt_l", "alt_r")
+        if self.keytips.active:
+            return self.keytips.key(ev)
+        if self.backstage_open():
+            if name == "escape":
+                self.hide_backstage()
+                return True
+            return False
+        if name == "f10" and not shift:
+            self.keytips.start()
+            return True
+        if alt and name == "q":
+            self.search.grab_focus()
+            return True
+        if alt and not ctrl and len(name) == 1 and name.isalnum():
+            if self.keytips.start_with(name.upper()):
+                return True
         cv = self.canvas
         focus = self.get_focus()
         in_text = cv.text is not None and focus is cv.text["view"]
@@ -1290,15 +1453,6 @@ class Window(Gtk.ApplicationWindow):
         if in_entry:
             return False
 
-        if alt and name == "f":
-            self.ribbon.file_btn.set_active(True)
-            return True
-        if alt and name == "h":
-            self.ribbon.show_tab("home")
-            return True
-        if alt and name == "v":
-            self.ribbon.show_tab("view")
-            return True
         if ctrl:
             table = {
                 "n": ("layer_add",) if shift else ("new",), "o": ("open",), "s": ("save_as",) if shift else ("save",),

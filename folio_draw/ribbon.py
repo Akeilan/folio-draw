@@ -275,14 +275,13 @@ class Ribbon(Gtk.Box):
         # tab strip
         tabs = _box(False, 0)
         tabs.get_style_context().add_class("fd-tabs")
-        self.file_btn = Gtk.MenuButton(label="File")
+        # File opens the full-window File view, like every app of the suite
+        self.file_btn = Gtk.Button(label="File")
         self.file_btn.get_style_context().add_class("fd-tab")
         self.file_btn.get_style_context().add_class("fd-file")
         self.file_btn.set_relief(Gtk.ReliefStyle.NONE)
-        self.file_btn.set_tooltip_text("File (Alt+F)")
-        self.file_menu = Gtk.Menu()
-        self.file_btn.set_popup(self.file_menu)
-        self.file_menu.connect("show", lambda *_: self.win.build_file_menu(self.file_menu))
+        self.file_btn.set_tooltip_text("File (Alt+F)\nNew, open, save, print and export pictures.")
+        self.file_btn.connect("clicked", lambda *_: self.win.show_backstage())
         tabs.pack_start(self.file_btn, False, False, 0)
 
         self.stack = Gtk.Stack()
@@ -307,6 +306,48 @@ class Ribbon(Gtk.Box):
         holder.pack_start(self.stack, True, True, 0)
         self.pack_start(holder, False, False, 0)
         self.tab_buttons["home"].set_active(True)
+        self._assign_keytips()
+
+    def _assign_keytips(self):
+        """Letters for KeyTips (Alt), per tab."""
+        def kt(page, widget, tip, pick=False):
+            widget.keytip = tip
+            widget.keytip_pick = pick
+            self.page_controls.setdefault(page, []).append(widget)
+        self.page_controls = {}
+        kt("home", self.paste_btn, "V")
+        kt("home", self.cut_btn, "X")
+        kt("home", self.copy_btn, "C")
+        kt("home", self.select_btn, "SE")
+        kt("home", self.crop_btn, "CR")
+        kt("home", self.resize_btn, "RE")
+        kt("home", self.rotate_btn, "RO")
+        for tool, tip in (("pencil", "P"), ("fill", "F"), ("text", "T"), ("eraser", "E"), ("picker", "K"), ("zoom", "M")):
+            kt("home", self.tool_buttons[tool], tip, pick=True)
+        kt("home", self.brush_btn, "B")
+        kt("home", self.outline_btn, "SO")
+        kt("home", self.fillmode_btn, "SF")
+        kt("home", self.size_btn, "SZ")
+        kt("home", self.well_buttons[1], "1", pick=True)
+        kt("home", self.well_buttons[2], "2", pick=True)
+        kt("home", self.edit_colors_btn, "EC")
+        for cmd, tip in (("zoom_in", "I"), ("zoom_out", "O"), ("zoom_100", "Z"), ("zoom_fit", "W")):
+            kt("view", self.zoom_buttons[cmd], tip)
+        for key, tip in (("rulers", "R"), ("grid", "G"), ("statusbar", "S"), ("layers", "L")):
+            kt("view", self.view_checks[key], tip)
+        kt("view", self.fullscreen_btn, "F")
+        kt("view", self.frames_btn, "FV")
+        kt("view", self.play_btn, "PL")
+        kt("view", self.anim_widgets[0], "FP")
+        kt("view", self.anim_widgets[1], "FN")
+        kt("view", self.loop_combo, "PT")
+        kt("text", self.font_combo, "FF")
+        kt("text", self.size_combo, "FS")
+        for k, tip in (("bold", "1"), ("italic", "2"), ("underline", "3"), ("strike", "4")):
+            kt("text", self.style_toggles[k], tip)
+        kt("text", self.opaque_radio, "O")
+        kt("text", self.transp_radio, "T")
+        kt("text", self.text_done_btn, "D")
 
     def _on_tab(self, btn, name):
         if self._sync:
@@ -380,6 +421,7 @@ class Ribbon(Gtk.Box):
         self.crop_btn.connect("clicked", lambda *_: w.cmd("crop"))
         resize = small_button("resize", "Resize", "Resize and skew (Ctrl+W)")
         resize.connect("clicked", lambda *_: w.cmd("resize"))
+        self.resize_btn = resize
         rot_menu = make_menu([
             ("Rotate right 90°", "rotate", lambda: w.cmd("rot_cw")),
             ("Rotate left 90°", "rot_left", lambda: w.cmd("rot_ccw")),
@@ -392,6 +434,7 @@ class Ribbon(Gtk.Box):
             ("Invert colors", "invert", lambda: w.cmd("invert_colors"), "Ctrl+Shift+I"),
         ])
         rotate = small_button("rotate", "Rotate", "Rotate or flip", menu=rot_menu)
+        self.rotate_btn = rotate
         for b in (self.crop_btn, resize, rotate):
             col.pack_start(b, False, False, 0)
         img.pack_start(col, False, False, 0)
@@ -542,6 +585,7 @@ class Ribbon(Gtk.Box):
         colors.pack_start(pal, False, False, 2)
         edit = big_button("editcolors", "Edit colors", "Edit colors\nSelect a color from the color palette.")
         edit.connect("clicked", lambda *_: w.cmd("edit_colors"))
+        self.edit_colors_btn = edit
         colors.pack_start(edit, False, False, 0)
         row.pack_start(group("Colors", colors), False, False, 2)
         return row
@@ -681,6 +725,7 @@ class Ribbon(Gtk.Box):
         w = self.win
         row = _box(False, 2)
         z = _box(False, 2)
+        self.zoom_buttons = {}
         for icon, label, tip, cmd in (("zoomin", "Zoom\nin", "Zoom in (Ctrl+Page Up)", "zoom_in"),
                                       ("zoomout", "Zoom\nout", "Zoom out (Ctrl+Page Down)", "zoom_out"),
                                       ("zoom100", "100%", "Zoom to 100%", "zoom_100"),
@@ -688,6 +733,7 @@ class Ribbon(Gtk.Box):
             b = big_button(icon, label, tip)
             b.connect("clicked", lambda _b, c=cmd: w.cmd(c))
             z.pack_start(b, False, False, 0)
+            self.zoom_buttons[cmd] = b
         row.pack_start(group("Zoom", z), False, False, 2)
         row.pack_start(sep(), False, False, 0)
         sh = Gtk.Grid(row_spacing=0, column_spacing=12)
@@ -705,6 +751,7 @@ class Ribbon(Gtk.Box):
         row.pack_start(sep(), False, False, 0)
         fs = big_button("fullscreen", "Full\nscreen", "Full screen (F11)\nView the picture in full screen.")
         fs.connect("clicked", lambda *_: w.cmd("fullscreen"))
+        self.fullscreen_btn = fs
         row.pack_start(group("Display", fs), False, False, 2)
         row.pack_start(sep(), False, False, 0)
 
@@ -785,6 +832,7 @@ class Ribbon(Gtk.Box):
         row.pack_start(sep(), False, False, 0)
         done = big_button("text", "Done", "Finish the text and place it on the picture (click outside the box)")
         done.connect("clicked", lambda *_: w.cmd("text_commit"))
+        self.text_done_btn = done
         row.pack_start(group("Text", done), False, False, 2)
         return row
 

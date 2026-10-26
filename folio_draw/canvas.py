@@ -138,7 +138,7 @@ class Canvas(Gtk.Grid):
         self.vruler.connect("draw", self._draw_ruler, False)
         corner = Gtk.DrawingArea()
         corner.set_size_request(RULER, RULER)
-        corner.connect("draw", lambda w, cr: (cr.set_source_rgb(0.96, 0.94, 0.94), cr.paint()))
+        corner.connect("draw", lambda w, cr: (cr.set_source_rgb(0.965, 0.965, 0.965), cr.paint()))
         self.corner = corner
         self.hscroll = Gtk.Scrollbar(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.hadj)
         self.vscroll = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=self.vadj)
@@ -282,7 +282,7 @@ class Canvas(Gtk.Grid):
     def _draw(self, w, cr):
         doc = self.doc
         aw, ah = w.get_allocated_width(), w.get_allocated_height()
-        cr.set_source_rgb(0.906, 0.878, 0.878)
+        cr.set_source_rgb(0.902, 0.902, 0.902)   # suite canvas grey #e6e6e6
         cr.paint()
         if doc is None or self.surf is None:
             return False
@@ -536,7 +536,7 @@ class Canvas(Gtk.Grid):
     # ------------------------------------------------------------------ rulers
     def _draw_ruler(self, w, cr, horizontal):
         width, height = w.get_allocated_width(), w.get_allocated_height()
-        cr.set_source_rgb(0.965, 0.945, 0.945)
+        cr.set_source_rgb(0.965, 0.965, 0.965)
         cr.paint()
         cr.set_source_rgb(0.78, 0.72, 0.72)
         cr.set_line_width(1)
