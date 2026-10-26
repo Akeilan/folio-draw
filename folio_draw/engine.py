@@ -65,6 +65,7 @@ _sig("fd_fill", c_int, _P, c_int, c_int, c_uint, c_uint)
 _sig("fd_pick", c_uint, _P, c_int, c_int, c_int)
 _sig("fd_invert_colors", None, _P)
 _sig("fd_adjust_preview", None, _P, c_uint, c_float, c_float, c_float)
+_sig("fd_set_sample_all", None, _P, c_int)
 _sig("fd_adjust_end", None, _P)
 _sig("fd_adjust_cancel", None, _P)
 _sig("fd_sel_rect", None, _P, c_int, c_int, c_int, c_int)
@@ -290,6 +291,10 @@ class Document:
     # ---- adjustments (kinds: ADJ_*); a preview can be changed, then kept or dropped
     def adjust_preview(self, kind, a=0.0, b=0.0, c=0.0):
         L.fd_adjust_preview(self.h, kind, float(a), float(b), float(c))
+
+    def set_sample_all(self, on):
+        """Copy, Transparent selection and Fill look at every visible layer."""
+        L.fd_set_sample_all(self.h, 1 if on else 0)
 
     def adjust_end(self):
         L.fd_adjust_end(self.h)

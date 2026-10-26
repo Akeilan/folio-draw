@@ -404,6 +404,8 @@ class Ribbon(Gtk.Box):
         # Image
         self.transparent_item = menu_item("Transparent selection", check=self.st.transparent_sel,
                                           cb=lambda: w.cmd("toggle_transparent_sel", self.transparent_item.get_active()))
+        self.sample_item = menu_item("Sample all layers", check=self.st.sample_all,
+                                     cb=lambda: w.cmd("toggle_sample_all", self.sample_item.get_active()))
         sel_menu = make_menu([
             ("Rectangular selection", "select", lambda: w.set_tool("select")),
             ("Free-form selection", "freeselect", lambda: w.set_tool("freeselect")),
@@ -413,6 +415,7 @@ class Ribbon(Gtk.Box):
             ("Delete", "delete", lambda: w.cmd("delete"), "Delete"),
             None,
             self.transparent_item,
+            self.sample_item,
         ])
         img = _box(False, 2)
         self.select_btn = big_button("select", "Select", "Select\nSelect a part of the picture.", menu=sel_menu)
@@ -887,6 +890,7 @@ class Ribbon(Gtk.Box):
         self.fillmode_btn.set_sensitive(shape_mode)
         self.size_btn.set_sensitive(st.tool not in ("text", "picker", "zoom", "select", "freeselect"))
         self.transparent_item.set_active(st.transparent_sel)
+        self.sample_item.set_active(st.sample_all)
         for k, c in self.view_checks.items():
             c.set_active(st.view[k])
         doc = self.win.doc
