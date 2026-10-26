@@ -920,6 +920,22 @@ def i_sepia(cr, ink, acc):
 ICONS = {k[2:]: v for k, v in globals().items() if k.startswith("i_") and callable(v)}
 
 
+def _dark():
+    from . import appearance
+    return appearance.is_dark()
+
+
+def ink_colors():
+    """(ink, accent) for icons on the ribbon in the current light or dark mode."""
+    if _dark():
+        return (0.90, 0.90, 0.90), (0.94, 0.55, 0.55)
+    return INK, MAROON
+
+
+def ink():
+    return ink_colors()[0]
+
+
 def paint_icon(cr, name, size, ink=INK, acc=MAROON):
     fn = ICONS.get(name)
     if fn is None:
@@ -956,9 +972,9 @@ class Icon(Gtk.DrawingArea):
         if self.on_dark:
             ink, acc = (1, 1, 1), (1, 0.85, 0.85)
         else:
-            ink, acc = INK, MAROON
+            ink, acc = ink_colors()
         if not sens:
-            ink = acc = (0.65, 0.65, 0.65)
+            ink = acc = (0.42, 0.42, 0.42) if _dark() else (0.65, 0.65, 0.65)
         if self.painter:
             self.painter(cr, self.size, ink, acc)
         else:

@@ -141,9 +141,84 @@ menu menuitem:hover label { color: #1c1818; }
 """
 
 
+# Dark mode (the desktop is set to dark): the chrome goes dark like Paint's; the picture keeps its colours.
+DARK_CSS = b"""
+@define-color fd_tint #3a2a2a;
+@define-color fd_tint2 #5a2e2e;
+@define-color fd_check_border #8f4f4f;
+@define-color fd_panel #2b2b2b;
+@define-color fd_line #404040;
+@define-color fd_text #f0f0f0;
+@define-color fd_caption #b0b0b0;
+@define-color fd_hover #3d3d3d;
+@define-color fd_press #4a4a4a;
+
+.fd-tab:checked { border-bottom-color: #d06060; }
+.fd-tab:checked label { color: #f0a8a8; }
+.fd-tab.fd-context label, .fd-tab.fd-context:checked label { color: #f0b060; }
+.fd-rbtn:disabled label { color: #707070; }
+.fd-workspace { background: #1f1f1f; }
+.fd-ruler { background: #2b2b2b; }
+.fd-status label, .fd-status button { color: #d0d0d0; }
+.fd-layers, .fd-layers list { background: #242424; }
+.fd-layers row { border-bottom-color: #333333; }
+.fd-layers row label, .fd-layers label { color: #f0f0f0; }
+.fd-layers label:disabled { color: #777777; }
+.fd-layers label.fd-layers-title { color: #f0a8a8; }
+.fd-layers row:selected label { color: #ffffff; }
+
+.fd-keytip { background: #f0f0f0; color: #1f1f1f; border-color: #ffffff; }
+.fd-backstage { background: #1f1f1f; }
+.fd-bs-title, .fd-bs-sub, .fd-bs-tile, .fd-bs-place, .fd-bs-button { color: #f0f0f0; }
+.fd-bs-tile label, .fd-bs-place label, .fd-bs-button label { color: #f0f0f0; }
+.fd-bs-button { background: #2b2b2b; border-color: #555555; }
+menu menuitem:hover, menu menuitem:hover label { color: #ffffff; }
+popover, popover.background { background-color: #2b2b2b; color: #f0f0f0; }
+popover label { color: #f0f0f0; }
+"""
+
+_dark_provider = None
+
+
 def install():
+    global _dark_provider
+    from . import appearance
+    if _dark_provider is not None:
+        return   # once per process
     prov = Gtk.CssProvider()
     prov.load_from_data(CSS)
+    _dark_provider = Gtk.CssProvider()
+    _dark_provider.load_from_data(DARK_CSS)
     screen = Gdk.Screen.get_default()
-    if screen is not None:
-        Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    if screen is None:
+        return
+    Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    appearance.apply_initial()
+    _apply(appearance.is_dark())
+    appearance.on_change(_apply)
+
+
+def _apply(dark):
+    screen = Gdk.Screen.get_default()
+    if screen is None or _dark_provider is None:
+        return
+    if dark:
+        Gtk.StyleContext.add_provider_for_screen(screen, _dark_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+    else:
+        Gtk.StyleContext.remove_provider_for_screen(screen, _dark_provider)
+    # cairo-drawn chrome (icons, rulers, the workspace) repaints in the new colours
+    for w in Gtk.Window.list_toplevels():
+        w.queue_draw()
+
+
+def chrome(name):
+    """Colours of chrome painted with cairo, for the current mode."""
+    from . import appearance
+    dark = appearance.is_dark()
+    return {
+        "workspace": (0.122, 0.122, 0.122) if dark else (0.902, 0.902, 0.902),
+        "ruler": (0.169, 0.169, 0.169) if dark else (0.965, 0.965, 0.965),
+        "ruler_line": (0.33, 0.30, 0.30) if dark else (0.78, 0.72, 0.72),
+        "ruler_text": (0.80, 0.78, 0.78) if dark else (0.35, 0.3, 0.3),
+        "accent_text": "#f0a8a8" if dark else "#800000",
+    }[name]

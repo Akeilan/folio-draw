@@ -11,7 +11,7 @@ from gi.repository import Gtk, PangoCairo  # noqa: E402
 from .tools import SEL_TOOLS
 from .stabilizer import TOOLS as STAB_TOOLS, NAMES as STAB_NAMES, TIPS as STAB_TIPS
 from . import shapes
-from .icons import INK, Icon
+from .icons import Icon, ink as icon_ink
 
 PALETTE = [
     (0, 0, 0, 255), (127, 127, 127, 255), (136, 0, 21, 255), (237, 28, 36, 255), (255, 127, 39, 255),
@@ -50,7 +50,8 @@ def checker(cr, x, y, w, h, s=4):
 
 def draw_swatch(cr, x, y, w, h, color):
     if color is None:
-        cr.set_source_rgb(1, 1, 1)
+        from . import appearance
+        cr.set_source_rgb(*((0.24, 0.24, 0.24) if appearance.is_dark() else (1, 1, 1)))
         cr.rectangle(x, y, w, h)
         cr.fill()
     else:
@@ -769,7 +770,7 @@ class Ribbon(Gtk.Box):
 
             def draw(w, cr, p=p):
                 h = w.get_allocated_height()
-                cr.set_source_rgb(*INK)
+                cr.set_source_rgb(*icon_ink())
                 cr.rectangle(4, (h - min(p, 32)) / 2, w.get_allocated_width() - 8, min(p, 32))
                 cr.fill()
             da.connect("draw", draw)
