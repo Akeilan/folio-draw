@@ -36,6 +36,7 @@ class EmbUI:
     def __init__(self, win):
         self.win = win
         self.sel_layer = None        # layer id holding the selected objects
+        self.sel_hole = None         # a hole (ring index) of the one selected shape
         self.sel = []                # selected object ids
         self.mode = "select"         # select | nodes | cut
         self.drag = None
@@ -294,6 +295,17 @@ class EmbUI:
             cr.set_dash([4, 3])
             cr.stroke()
             cr.set_dash([])
+        if self.sel_hole is not None and len(objs) == 1 and self.sel_hole < len(objs[0].get("rings", [])):
+            ring = objs[0]["rings"][self.sel_hole]
+            for k, (x, y) in enumerate(ring):
+                X, Y = scr(x, y)
+                (cr.move_to if k == 0 else cr.line_to)(X, Y)
+            cr.close_path()
+            cr.set_source_rgba(0.5, 0.0, 0.0, 0.18)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.8, 0.1, 0.1, 1.0)
+            cr.set_line_width(2.5)
+            cr.stroke()
         if self.cut_line:
             cr.set_source_rgba(0.8, 0.1, 0.1, 0.9)
             cr.set_line_width(1.5)
@@ -318,6 +330,16 @@ class EmbUI:
             self.drag = {"kind": "cut"}
             return
         i, sp, objs = self.selected()
+        # a hole of the selected shape: clicking inside it picks the hole (Delete fills it)
+        if len(objs) == 1 and len(objs[0].get("rings", [])) > 1 and ev.button == 1 and not shift:
+            for ri, ring in enumerate(objs[0]["rings"][1:], start=1):
+                if M.point_in_rings([ring], mx, my):
+                    self.sel_hole = ri
+                    self.win.canvas.area.queue_draw()
+                    self.refresh_ribbon()
+                    self.win.hint("Hole selected. Delete (or Fill Holes) fills it in.", 6)
+                    return
+        self.sel_hole = None
         if self.mode == "nodes" and len(objs) == 1 and objs[0].get("rings"):
             cv = self.win.canvas
             s = self.settings()
@@ -403,7 +425,10 @@ class EmbUI:
         if not self.active() or self.win.state.tool != "emb":
             return False
         if name in ("Delete", "BackSpace") and self.sel:
-            self.c_emb_delete()
+            if self.sel_hole is not None:
+                self.c_emb_fill_holes()
+            else:
+                self.c_emb_delete()
             return True
         if name == "Escape":
             if self.mode != "select" or self.sel:
@@ -420,6 +445,7 @@ class EmbUI:
         return False
 
     def select(self, li, ids):
+        self.sel_hole = None
         if li is None or not ids:
             self.sel = []
             self.sel_layer = None
@@ -484,6 +510,7 @@ class EmbUI:
                  ("Merge", "union", lambda: self.win.cmd("emb_merge")),
                  ("Split", "split", lambda: self.win.cmd("emb_split")),
                  ("Edit nodes", "nodes", lambda: self.win.cmd("emb_nodes")),
+                 ("Fill holes", "fillholes", lambda: self.win.cmd("emb_fill_holes")),
                  None,
                  ("Sew earlier", "backward", lambda: self.win.cmd("emb_order", -1)),
                  ("Sew later", "forward", lambda: self.win.cmd("emb_order", 1)),
@@ -531,6 +558,10 @@ class EmbUI:
         order.pack_start(small("later", "forward", None, "Sew later", "emb_order", 1), False, False, 0)
         col.pack_start(order, False, False, 0)
         sh.pack_start(col, False, False, 0)
+        col = _box(True, 0)
+        col.pack_start(small("fillholes", "fillholes", "Fill Holes", "Fill in the selected hole, or every hole of the selected shapes, "
+                             "so a ring becomes a solid shape. Click inside a selected shape's hole to pick one.", "emb_fill_holes"), False, False, 0)
+        sh.pack_start(col, False, False, 0)
         row.pack_start(group("Shapes", sh), False, False, 2)
         row.pack_start(sep(), False, False, 0)
         stb = _box(False, 2)
@@ -577,6 +608,7 @@ class EmbUI:
         for k in ("stitch", "type"):
             self.buttons[k].set_sensitive(bool(shapes))
         self.buttons["nodes"].set_sensitive(len(objs) == 1 and bool(objs[0].get("rings")))
+        self.buttons["fillholes"].set_sensitive(any(len(o.get("rings", [])) > 1 for o in objs))
         self.buttons["merge"].set_sensitive(len([o for o in objs if o.get("rings")]) >= 2)
         self.buttons["split"].set_sensitive(len(objs) == 1 and bool(objs[0].get("rings")))
         self.buttons["mirror"].set_sensitive(any(o.get("kind") == "stitches" for o in objs))
@@ -815,6 +847,25 @@ class EmbUI:
         self.win.canvas.area.queue_draw()
         if self.mode == "nodes":
             self.win.hint("Drag the corners of the shape. Esc when done.", 6)
+
+    def c_emb_fill_holes(self):
+        """Fill the selected hole, or every hole of the selected shapes: a ring becomes solid."""
+        i, sp, objs = self.selected()
+        objs = [o for o in objs if len(o.get("rings", [])) > 1]
+        if not objs:
+            self.win.hint("The selected shapes have no holes.", 5)
+            return
+        if self.sel_hole is not None and len(objs) == 1 and self.sel_hole < len(objs[0]["rings"]):
+            del objs[0]["rings"][self.sel_hole]
+            n = 1
+        else:
+            n = sum(len(o["rings"]) - 1 for o in objs)
+            for o in objs:
+                o["rings"] = o["rings"][:1]
+        self.sel_hole = None
+        self.store(i, sp, "Fill holes")
+        self.changed("Fill holes")
+        self.win.hint("%d hole%s filled. Shapes on the layers above still cover it, so it isn't stitched twice." % (n, "" if n == 1 else "s"), 7)
 
     def c_emb_merge(self):
         i, sp, objs = self.selected()

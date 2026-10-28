@@ -154,6 +154,19 @@ def i_spool(cr, ink, acc):
     icons._fs(cr, ink)
 
 
+def i_fillholes(cr, ink, acc):
+    cr.set_source_rgb(*acc)
+    cr.rectangle(3, 5, 18, 14)
+    cr.fill()
+    cr.set_source_rgb(1, 1, 1)
+    cr.arc(12, 12, 4.5, math.pi * 0.5, math.pi * 1.5)
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_dash([1.5, 1.2])
+    cr.arc(12, 12, 4.5, 0, math.tau)
+    cr.stroke()
+
+
 def i_stitchtype(cr, ink, acc):
     cr.set_source_rgb(*acc)
     cr.set_line_width(1.1)

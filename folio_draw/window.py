@@ -98,6 +98,7 @@ SEARCH_COMMANDS = [
     ("New embroidery", ("emb_new",), ""), ("Place picture on the hoop", ("emb_place",), "Ctrl+Shift+P"),
     ("Convert picture to shapes", ("emb_trace",), ""), ("Select shapes", ("emb_tool",), ""),
     ("Edit nodes", ("emb_nodes",), ""), ("Merge shapes", ("emb_merge",), ""), ("Split shape", ("emb_split",), ""),
+    ("Fill holes", ("emb_fill_holes",), ""),
     ("Thread colour", ("emb_recolour",), ""), ("Delete shapes", ("emb_delete",), ""),
     ("Stitch properties", ("emb_stitch",), ""), ("Stop after shape", ("emb_stop",), ""),
     ("Lettering", ("emb_lettering",), ""), ("Embroidery preview", ("emb_preview",), ""),
