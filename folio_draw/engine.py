@@ -58,6 +58,11 @@ _sig("fd_op_end", None, _P)
 _sig("fd_op_cancel", None, _P)
 _sig("fd_stroke_begin", None, _P, c_uint, c_float, c_float, c_uint)
 _sig("fd_stroke_to", None, _P, c_float, c_float)
+_sig("fd_remove_background", c_uint, _P)
+_sig("fd_note", c_void_p, _P)
+_sig("fd_emb_free_str", None, c_void_p)
+_sig("fd_stroke_dynamics", None, _P, c_float, c_float, c_uint)
+_sig("fd_stroke_pen", None, _P, c_float, c_float, c_float)
 _sig("fd_stroke_end", None, _P)
 _sig("fd_shape", None, _P, POINTER(c_float), c_uint, c_int, c_float, c_uint, c_uint, c_uint, c_int)
 _sig("fd_blit_premul", None, _P, c_int, c_int, c_uint, c_uint, c_void_p, c_uint)
@@ -186,7 +191,46 @@ class Document:
 
     @classmethod
     def load(cls, path):
+        if os.path.splitext(path)[1].lower() in (".svg", ".svgz"):
+            return cls.load_svg(path)
         return cls(L.fd_load(path.encode()))
+
+    @classmethod
+    def load_svg(cls, path, longest=None):
+        """An SVG drawing opened as a picture, at the size it gives (or `longest` pixels on its long side)."""
+        import gi
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf, GLib
+        try:
+            info = GdkPixbuf.Pixbuf.get_file_info(path)
+            fmt, w, h = (info[0], info[1], info[2]) if info else (None, 0, 0)
+            if fmt is None:
+                raise EngineError("This SVG drawing can't be read.")
+            if longest is None and (w <= 0 or h <= 0):
+                longest = 1024
+            if longest is None and max(w, h) > 8192:
+                longest = 8192
+            if longest:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, longest, longest, True)
+            else:
+                pb = GdkPixbuf.Pixbuf.new_from_file(path)
+        except GLib.Error as e:
+            raise EngineError("This SVG drawing can't be read: %s" % e.message)
+        if not pb.get_has_alpha():
+            pb = pb.add_alpha(False, 0, 0, 0)
+        w, h, rs = pb.get_width(), pb.get_height(), pb.get_rowstride()
+        raw = pb.get_pixels()
+        data = b"".join(raw[y * rs:y * rs + w * 4] for y in range(h))
+        return cls.from_rgba(w, h, data)
+
+    @property
+    def note(self):
+        p = L.fd_note(self.h)
+        if not p:
+            return ""
+        s = ctypes.cast(p, c_char_p).value.decode("utf-8", "replace")
+        L.fd_emb_free_str(p)
+        return s
 
     def close(self):
         if self.h:
@@ -287,6 +331,16 @@ class Document:
 
     def stroke_to(self, x, y):
         L.fd_stroke_to(self.h, x, y)
+
+    def remove_background(self):
+        return bool(L.fd_remove_background(self.h))
+
+    def stroke_dynamics(self, size_k, opacity_k, tilt_nib):
+        """How much pen pressure drives size and opacity (0..1), and whether tilt turns the nib."""
+        L.fd_stroke_dynamics(self.h, size_k, opacity_k, 1 if tilt_nib else 0)
+
+    def stroke_pen(self, pressure, tilt_x=0.0, tilt_y=0.0):
+        L.fd_stroke_pen(self.h, pressure, tilt_x, tilt_y)
 
     def stroke_end(self):
         L.fd_stroke_end(self.h)

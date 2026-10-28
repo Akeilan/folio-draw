@@ -95,6 +95,14 @@ pub struct Stroke {
     carry: f32,
     bbox: Option<(usize, usize, usize, usize)>,
     rng: u64,
+    // pen dynamics: how much pressure drives size and opacity (0..1), and whether tilt turns the nib
+    pk_size: f32,
+    pk_op: f32,
+    tilt_nib: bool,
+    pres: f32,
+    last_pres: f32,
+    tilt: (f32, f32),
+    cur_pres: f32,
 }
 
 pub struct Doc {
@@ -134,6 +142,8 @@ pub struct Doc {
     pub clip_h: usize,
     /// An embroidery document: its settings (hoop, machine, fabric...), the app's JSON; empty otherwise.
     pub emb: String,
+    /// Something the opener should tell the user about how the file came in (e.g. "psd-adjustments").
+    pub note: String,
 }
 
 // ------------------------------------------------------------------ pixel math
@@ -543,6 +553,7 @@ impl Doc {
             clip_w: 0,
             clip_h: 0,
             emb: String::new(),
+            note: String::new(),
         }
     }
 
@@ -1565,7 +1576,35 @@ impl Doc {
             carry: 0.0,
             bbox: None,
             rng: 0x9E37_79B9_7F4A_7C15 ^ (self.changes.wrapping_mul(2654435761)),
+            pk_size: 0.0,
+            pk_op: 0.0,
+            tilt_nib: false,
+            pres: 1.0,
+            last_pres: 1.0,
+            tilt: (0.0, 0.0),
+            cur_pres: 1.0,
         });
+    }
+
+    /// How strongly pen pressure drives size and opacity for the stroke in progress.
+    pub fn stroke_dynamics(&mut self, size_k: f32, op_k: f32, tilt_nib: bool) {
+        if let Some(s) = self.stroke.as_mut() {
+            s.pk_size = size_k.clamp(0.0, 1.0);
+            s.pk_op = op_k.clamp(0.0, 1.0);
+            s.tilt_nib = tilt_nib;
+        }
+    }
+
+    /// Pen state for the next stroke_to: pressure 0..1, tilt -1..1 on each axis.
+    pub fn stroke_pen(&mut self, pressure: f32, tx: f32, ty: f32) {
+        if let Some(s) = self.stroke.as_mut() {
+            let p = if pressure.is_finite() { pressure.clamp(0.0, 1.0) } else { 1.0 };
+            if s.last.is_none() {
+                s.last_pres = p;
+            }
+            s.pres = p;
+            s.tilt = (if tx.is_finite() { tx.clamp(-1.0, 1.0) } else { 0.0 }, if ty.is_finite() { ty.clamp(-1.0, 1.0) } else { 0.0 });
+        }
     }
 
     pub fn stroke_to(&mut self, x: f32, y: f32) {
@@ -1577,12 +1616,15 @@ impl Doc {
             TOOL_AIRBRUSH => (size * 0.35).max(1.0),
             _ => (size * 0.1).max(0.5),
         };
+        let (p0, p1) = (st.last_pres, st.pres);
         match st.last {
             None => {
+                self.set_dab_pres(p1);
                 self.dab(x, y);
                 if let Some(s) = self.stroke.as_mut() {
                     s.last = Some((x, y));
                     s.carry = 0.0;
+                    s.last_pres = p1;
                 }
             }
             Some((lx, ly)) => {
@@ -1590,13 +1632,18 @@ impl Doc {
                 let dist = (dx * dx + dy * dy).sqrt();
                 if dist < 1e-6 {
                     if tool == TOOL_AIRBRUSH {
+                        self.set_dab_pres(p1);
                         self.dab(x, y);
+                    }
+                    if let Some(s) = self.stroke.as_mut() {
+                        s.last_pres = p1;
                     }
                     return;
                 }
                 let mut t = spacing - st.carry;
                 while t <= dist {
                     let f = t / dist;
+                    self.set_dab_pres(p0 + (p1 - p0) * f);
                     self.dab(lx + dx * f, ly + dy * f);
                     t += spacing;
                 }
@@ -1604,6 +1651,7 @@ impl Doc {
                 if let Some(s) = self.stroke.as_mut() {
                     s.carry = carry;
                     s.last = Some((x, y));
+                    s.last_pres = p1;
                 }
             }
         }
@@ -1620,11 +1668,25 @@ impl Doc {
         self.op_end();
     }
 
+    fn set_dab_pres(&mut self, p: f32) {
+        if let Some(s) = self.stroke.as_mut() {
+            s.cur_pres = p;
+        }
+    }
+
     fn dab(&mut self, cx: f32, cy: f32) {
-        let (tool, size, hard) = {
+        let (tool, size, hard, flow, nib) = {
             let s = self.stroke.as_ref().unwrap();
-            (s.tool, s.size, s.hard)
+            let p = s.cur_pres;
+            let size = (s.size * (1.0 - s.pk_size * (1.0 - p))).max(1.0);
+            let flow = (1.0 - s.pk_op * (1.0 - p)).clamp(0.0, 1.0);
+            let tl = (s.tilt.0 * s.tilt.0 + s.tilt.1 * s.tilt.1).sqrt();
+            let nib = if s.tilt_nib && tl > 0.1 { Some(s.tilt.1.atan2(s.tilt.0)) } else { None };
+            (s.tool, size, s.hard, flow, nib)
         };
+        if flow <= 0.0 {
+            return;
+        }
         let r = size * 0.5;
         let ext = r + 2.0;
         let x0 = ((cx - ext).floor() as i64).clamp(0, self.w as i64) as usize;
@@ -1640,7 +1702,7 @@ impl Doc {
                 if size <= 1.5 {
                     let (px, py) = (cx.floor() as i64, cy.floor() as i64);
                     if px >= 0 && py >= 0 && (px as usize) < self.w && (py as usize) < self.h {
-                        self.mask[py as usize * w + px as usize] = 255;
+                        { let m = &mut self.mask[py as usize * w + px as usize]; *m = (*m).max((255.0 * flow + 0.5) as u8); }
                     }
                 } else {
                     let ccx = cx.floor() + 0.5;
@@ -1651,7 +1713,8 @@ impl Doc {
                             let dx = x as f32 + 0.5 - ccx;
                             let dy = y as f32 + 0.5 - ccy;
                             if dx * dx + dy * dy <= rr {
-                                self.mask[y * w + x] = 255;
+                                let m = &mut self.mask[y * w + x];
+                                *m = (*m).max((255.0 * flow + 0.5) as u8);
                             }
                         }
                     }
@@ -1672,14 +1735,15 @@ impl Doc {
                     let py = (cy + rad * ang.sin()).floor() as i64;
                     if px >= 0 && py >= 0 && (px as usize) < self.w && (py as usize) < self.h {
                         let m = &mut self.mask[py as usize * w + px as usize];
-                        *m = m.saturating_add(90);
+                        *m = m.saturating_add((90.0 * flow) as u8);
                     }
                 }
             }
             _ => {
-                let (ca, sa) = match tool {
-                    TOOL_CALLIGRAPHY => ((-45f32).to_radians().cos(), (-45f32).to_radians().sin()),
-                    TOOL_CALLIGRAPHY2 => (45f32.to_radians().cos(), 45f32.to_radians().sin()),
+                let (ca, sa) = match (tool, nib) {
+                    (TOOL_CALLIGRAPHY | TOOL_CALLIGRAPHY2, Some(a)) => (a.cos(), a.sin()),
+                    (TOOL_CALLIGRAPHY, None) => ((-45f32).to_radians().cos(), (-45f32).to_radians().sin()),
+                    (TOOL_CALLIGRAPHY2, None) => (45f32.to_radians().cos(), 45f32.to_radians().sin()),
                     _ => (1.0, 0.0),
                 };
                 let thin = (size / 6.0).max(0.8);
@@ -1721,7 +1785,7 @@ impl Doc {
                         };
                         if cov > 0.0 {
                             let m = &mut self.mask[y * w + x];
-                            let v = (cov * 255.0 + 0.5) as u8;
+                            let v = (cov * flow * 255.0 + 0.5) as u8;
                             if v > *m {
                                 *m = v;
                             }
@@ -2011,6 +2075,63 @@ impl Doc {
             let p = &self.layers[self.active].px[i..i + 4];
             [p[0], p[1], p[2], p[3]]
         }
+    }
+
+    /// Remove Background: cut the subject of the active layer (or of the selection) out of its background.
+    /// Returns false when there was nothing to remove.
+    pub fn remove_background(&mut self) -> bool {
+        self.commit_float();
+        self.finish_pending();
+        if self.layers.is_empty() {
+            return false;
+        }
+        let (x0, y0, x1, y1) = self.sel_bounds().unwrap_or((0, 0, self.w, self.h));
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        if bw < 3 || bh < 3 {
+            return false;
+        }
+        let li = self.active;
+        let mut sub = Vec::with_capacity(bw * bh * 4);
+        for y in y0..y1 {
+            let o = (y * self.w + x0) * 4;
+            sub.extend_from_slice(&self.layers[li].px[o..o + bw * 4]);
+        }
+        // outside the selection counts as background, so a lasso round the subject works as in Paint
+        let has_sel = self.sel.is_some();
+        if has_sel {
+            for y in 0..bh {
+                for x in 0..bw {
+                    if self.sel_at((y + y0) * self.w + x + x0) < 0.5 {
+                        sub[(y * bw + x) * 4 + 3] = 0;
+                    }
+                }
+            }
+        }
+        let alpha = crate::cutout::subject_alpha(&sub, bw, bh);
+        if alpha.iter().zip(sub.chunks_exact(4)).all(|(&a, p)| a > 0 || p[3] < 16) {
+            return false;
+        }
+        self.op_begin();
+        self.touch(x0 as i64, y0 as i64, x1 as i64, y1 as i64);
+        for y in 0..bh {
+            for x in 0..bw {
+                let i = (y + y0) * self.w + x + x0;
+                let s = self.sel_at(i);
+                if s <= 0.0 {
+                    continue;
+                }
+                let k = alpha[y * bw + x] as f32 / 255.0;
+                let p = &mut self.layers[li].px[i * 4..i * 4 + 4];
+                let f = 1.0 - s * (1.0 - k);
+                if f < 1.0 {
+                    // the layer stores premultiplied-free RGBA: only alpha changes
+                    p[3] = (p[3] as f32 * f + 0.5) as u8;
+                }
+            }
+        }
+        self.mark_dirty(x0 as i64, y0 as i64, x1 as i64, y1 as i64);
+        self.op_end();
+        true
     }
 
     pub fn invert_colors(&mut self) {
@@ -2713,6 +2834,76 @@ mod tests {
         assert_eq!(d.layers[0].px, before);
         assert!(d.redo());
         assert_eq!(d.layers[0].px, after);
+    }
+
+    #[test]
+    fn pen_pressure_drives_size_and_opacity() {
+        // a stroke whose pressure ramps from light to full gets wider and darker along its length
+        let width_at = |d: &Doc, x: usize| (0..100).filter(|&y| d.layers[0].px[(y * 200 + x) * 4 + 1] < 128).count();
+        let mut d = Doc::new(200, 100, [255, 255, 255, 255]);
+        d.stroke_begin(TOOL_BRUSH, 30.0, 1.0, [0, 0, 0, 255]);
+        d.stroke_dynamics(1.0, 0.0, false);
+        d.stroke_pen(0.1, 0.0, 0.0);
+        d.stroke_to(20.0, 50.0);
+        d.stroke_pen(1.0, 0.0, 0.0);
+        d.stroke_to(180.0, 50.0);
+        d.stroke_end();
+        let (a, b) = (width_at(&d, 30), width_at(&d, 170));
+        assert!(a < 10 && b >= 27, "thin start, full end: {a} {b}");
+        // opacity: light pressure leaves a pale stroke
+        let mut d = Doc::new(200, 100, [255, 255, 255, 255]);
+        d.stroke_begin(TOOL_BRUSH, 20.0, 1.0, [0, 0, 0, 255]);
+        d.stroke_dynamics(0.0, 1.0, false);
+        d.stroke_pen(0.25, 0.0, 0.0);
+        d.stroke_to(20.0, 50.0);
+        d.stroke_to(180.0, 50.0);
+        d.stroke_end();
+        let g = d.layers[0].px[(50 * 200 + 100) * 4];
+        assert!(g > 170 && g < 210, "about a quarter dark: {g}");
+        // no dynamics (a mouse): unchanged
+        let mut d = Doc::new(200, 100, [255, 255, 255, 255]);
+        d.stroke_begin(TOOL_BRUSH, 20.0, 1.0, [0, 0, 0, 255]);
+        d.stroke_pen(0.1, 0.0, 0.0);
+        d.stroke_to(20.0, 50.0);
+        d.stroke_to(180.0, 50.0);
+        d.stroke_end();
+        assert_eq!(d.layers[0].px[(50 * 200 + 100) * 4], 0);
+        assert!(width_at(&d, 100) >= 19);
+    }
+
+    #[test]
+    fn remove_background_is_one_undo_step() {
+        let mut d = Doc::new(80, 60, [240, 240, 240, 255]);
+        d.shape(&[(20.0, 15.0), (60.0, 15.0), (60.0, 45.0), (20.0, 45.0)], true, 1.0, [0, 0, 0, 0], [30, 90, 200, 255], 2, false);
+        let before = d.layers[0].px.clone();
+        assert!(d.remove_background());
+        assert_eq!(d.layers[0].px[(5 * 80 + 5) * 4 + 3], 0);
+        assert_eq!(d.layers[0].px[(30 * 80 + 40) * 4 + 3], 255);
+        assert!(!d.remove_background(), "nothing left to remove");
+        assert!(d.undo());
+        assert_eq!(d.layers[0].px, before);
+        // with a selection only the selected part is cut out; the rest stays
+        d.sel_rect(0, 0, 40, 60);
+        assert!(d.remove_background());
+        assert_eq!(d.layers[0].px[(5 * 80 + 5) * 4 + 3], 0);
+        assert_eq!(d.layers[0].px[(5 * 80 + 75) * 4 + 3], 255);
+    }
+
+    #[test]
+    fn pen_tilt_turns_the_calligraphy_nib() {
+        // a horizontal stroke with the nib held vertical is tall; with the nib flat it is thin
+        let tall = |tx: f32, ty: f32| {
+            let mut d = Doc::new(200, 100, [255, 255, 255, 255]);
+            d.stroke_begin(TOOL_CALLIGRAPHY, 30.0, 1.0, [0, 0, 0, 255]);
+            d.stroke_dynamics(0.0, 0.0, true);
+            d.stroke_pen(1.0, tx, ty);
+            d.stroke_to(20.0, 50.0);
+            d.stroke_to(180.0, 50.0);
+            d.stroke_end();
+            (0..100).filter(|&y| d.layers[0].px[(y * 200 + 100) * 4] < 128).count()
+        };
+        let (v, h) = (tall(0.0, 0.8), tall(0.8, 0.0));
+        assert!(v > 20 && h < 8, "vertical nib {v}, flat nib {h}");
     }
 
     #[test]

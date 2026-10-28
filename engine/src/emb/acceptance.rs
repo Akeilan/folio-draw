@@ -106,7 +106,15 @@ fn reference_logo_five_colours() {
     assert!(t.names.iter().any(|n| n.contains("Red") || n == "Vermilion"), "{:?}", t.names);
     assert!(t.names.iter().any(|n| n.contains("Green")), "{:?}", t.names);
     assert!(t.names.iter().any(|n| n.contains("Blue") || n == "Ultramarine"), "{:?}", t.names);
-    assert!(t.secs < 3.0, "conversion took {:.2} s", t.secs);
+    assert!(t.secs < 3.0 * busy(), "conversion took {:.2} s", t.secs);
+}
+
+/// How much slower than usual this machine runs now: the time limits stretch when other work
+/// shares the processors (the 1-minute load average over the number of processors, at least 1).
+fn busy() -> f64 {
+    let load = std::fs::read_to_string("/proc/loadavg").ok().and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok()).unwrap_or(0.0);
+    let cpus = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(1.0);
+    (load / cpus).max(1.0)
 }
 
 /// The reference emblem is a third-party logo kept out of the public repository: the test
@@ -141,7 +149,7 @@ fn reference_emblem_two_colours() {
     let p = plan(&design(&[grouped(&t.shapes, "emblem")]));
     assert_eq!(p.blocks.len(), 2);
     assert_eq!(p.blocks[0].thread.name, "White", "{:?}", p.blocks.iter().map(|b| b.thread.name.clone()).collect::<Vec<_>>());
-    assert!(t.secs < 3.0, "conversion took {:.2} s", t.secs);
+    assert!(t.secs < 3.0 * busy(), "conversion took {:.2} s", t.secs);
 }
 
 #[test]

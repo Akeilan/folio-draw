@@ -40,8 +40,9 @@ SAVE_FORMATS = {
     ".ora": (E.FMT_ORA, "OpenRaster (keeps layers)"),
 }
 OPEN_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.bmp", "*.dib", "*.gif", "*.ora",
-                 "*.webp", "*.tif", "*.tiff", "*.ico", "*.cur",
-                 "*.PNG", "*.JPG", "*.JPEG", "*.BMP", "*.GIF", "*.ORA", "*.WEBP", "*.TIF", "*.TIFF", "*.ICO", "*.CUR"]
+                 "*.webp", "*.tif", "*.tiff", "*.ico", "*.cur", "*.psd", "*.psb", "*.svg", "*.svgz",
+                 "*.PNG", "*.JPG", "*.JPEG", "*.BMP", "*.GIF", "*.ORA", "*.WEBP", "*.TIF", "*.TIFF", "*.ICO", "*.CUR",
+                 "*.PSD", "*.PSB", "*.SVG", "*.SVGZ"]
 # a still format and the animated form it can take when layers become frames
 ANIM_FORMATS = {E.FMT_GIF: E.FMT_GIF_ANIM, E.FMT_WEBP: E.FMT_WEBP_ANIM}
 # commands that may run while an animation preview is playing
@@ -75,6 +76,8 @@ SEARCH_COMMANDS = [
     ("Rotate left 90°", ("rot_ccw",), ""), ("Rotate 180°", ("rot_180",), ""),
     ("Rotate by angle", ("rotate_angle",), "Ctrl+Shift+R"), ("Flip horizontal", ("flip_h",), ""),
     ("Flip vertical", ("flip_v",), ""), ("Invert colors", ("invert_colors",), "Ctrl+Shift+I"),
+    ("Remove background", ("remove_background",), ""),
+    ("Send in email", ("send_email", "png"), ""), ("Send in email with layers (OpenRaster)", ("send_email", "ora"), ""),
     ("Brightness and contrast", ("adjust", "brightness"), ""), ("Hue and saturation", ("adjust", "huesat"), ""),
     ("Greyscale", ("greyscale",), ""), ("Sepia", ("sepia",), ""), ("Blur", ("adjust", "blur"), ""),
     ("Sharpen", ("adjust", "sharpen"), ""),
@@ -124,6 +127,15 @@ TOOL_LABELS = {"emb": "Shapes", "pencil": "Pencil", "brush": "Brush", "eraser": 
                "polyselect": "Move selection", "wand": "Move selection"}
 
 
+
+# Pen pressure and tilt, per brush: [pressure → size %, pressure → opacity %, tilt turns the nib].
+# A mouse reports no pressure, so these change nothing until a graphics tablet pen is used.
+PEN_DEFAULTS = {
+    "pencil": [0, 0, False], "eraser": [100, 0, False],
+    "brush": [100, 0, False], "soft": [60, 60, False], "callig": [100, 0, True], "callig2": [100, 0, True],
+    "airbrush": [30, 100, False], "marker": [0, 50, False],
+}
+
 class State:
     def __init__(self):
         self.tool = "pencil"
@@ -146,6 +158,7 @@ class State:
         self.view = {"rulers": False, "grid": False, "statusbar": True, "layers": True, "history": False}
         self.recent_colors = []         # the last colours painted with, newest first
         self.stabilizer = {t: [0, 0, 0] for t in ("pencil", "brush", "eraser")}  # StreamLine, Stabilization, Motion filtering
+        self.pen = {k: list(v) for k, v in PEN_DEFAULTS.items()}  # per brush: pressure→size %, pressure→opacity %, tilt turns the nib
         self.font_family = "Sans"
         self.font_size = 14.0
         self.bold = self.italic = self.underline = self.strike = False
@@ -154,7 +167,7 @@ class State:
         self.qat = ["save", "undo", "redo"]
 
     KEYS = ["brush", "shape", "color1", "color2", "custom_colors", "sizes", "tolerance", "outline", "fill_shape",
-            "transparent_sel", "sample_all", "wand_tolerance", "wand_contiguous", "recent_colors", "stabilizer", "page", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
+            "transparent_sel", "sample_all", "wand_tolerance", "wand_contiguous", "recent_colors", "stabilizer", "pen", "page", "view", "font_family", "font_size", "text_opaque", "recent", "qat"]
 
     def load(self):
         try:
@@ -186,6 +199,12 @@ class State:
                     for t, vs in (v.items() if isinstance(v, dict) else ()):
                         if t in base and isinstance(vs, list) and len(vs) == 3:
                             base[t] = [max(0, min(100, int(x))) for x in vs]
+                    v = base
+                elif k == "pen":
+                    base = {t: list(vs) for t, vs in self.pen.items()}
+                    for t, vs in (v.items() if isinstance(v, dict) else ()):
+                        if t in base and isinstance(vs, list) and len(vs) == 3:
+                            base[t] = [max(0, min(100, int(vs[0]))), max(0, min(100, int(vs[1]))), bool(vs[2])]
                     v = base
                 elif k == "recent_colors":
                     v = [tuple(c) for c in v if isinstance(c, (list, tuple)) and len(c) == 4][:10]
@@ -702,11 +721,13 @@ class Window(Gtk.ApplicationWindow):
         except E.EngineError as e:
             msg = str(e)
             if msg == "unsupported":
-                msg = "This file isn't a picture Folio Draw can open. Supported formats are PNG, JPEG, BMP, GIF, WebP, TIFF, icons and OpenRaster."
+                msg = "This file isn't a picture Folio Draw can open. Supported formats are PNG, JPEG, BMP, GIF, WebP, TIFF, icons, OpenRaster, Photoshop (PSD) and SVG."
             D.message(self, "Folio Draw can't open %s" % os.path.basename(path), msg, Gtk.MessageType.ERROR)
             return False
         self.set_document(doc, os.path.abspath(path))
         self.add_recent(self.path)
+        if doc.note == "psd-adjustments":
+            self.hint("This Photoshop file has adjustment or fill layers, so it opened as one picture, as Photoshop shows it.", 12)
         if doc.frames_view and doc.layer_count() > 1:
             self.hint("Opened %d frames, one per layer. View \u25b8 Play previews the animation." % doc.layer_count(), 10)
         if doc.frames_truncated:
@@ -915,6 +936,21 @@ class Window(Gtk.ApplicationWindow):
             st.stabilizer[st.tool][i] = max(0, min(100, int(v)))
             st.save()
 
+    def pen_key(self):
+        """Pen settings are kept for each brush, the pencil and the eraser."""
+        st = self.state
+        if st.tool == "brush":
+            return st.brush
+        return st.tool if st.tool in ("pencil", "eraser") else None
+
+    def c_pen(self, i, v):
+        k = self.pen_key()
+        if k is None:
+            return
+        cur = self.state.pen[k]
+        cur[i] = bool(v) if i == 2 else max(0, min(100, int(v)))
+        self.state.save()
+
     def c_stabilizer_open(self):
         if self.state.tool not in self.state.stabilizer:
             self.set_tool("brush")
@@ -939,9 +975,10 @@ class Window(Gtk.ApplicationWindow):
             self._action = CMD_LABELS.get((name,) + tuple(args)) or CMD_LABELS.get((name,)) or name.replace("_", " ").capitalize()
         if self.playing and name not in PLAYBACK_SAFE:
             self.stop_playback()
-        fn(*args)
+        r = fn(*args)
         self.ribbon.refresh()
         self.refresh_state()
+        return r
 
     def c_new(self):
         if self.confirm_discard():
@@ -1206,6 +1243,16 @@ class Window(Gtk.ApplicationWindow):
 
     def c_flip_v(self):
         self._transform(E.FLIP_V)
+
+    def c_remove_background(self):
+        self.finalize_pending()
+        if not self.doc.remove_background():
+            D.message(self, "Folio Draw couldn't find a background to remove",
+                      "The background is taken from the edges of the picture, or of the selection. "
+                      "Try selecting round the subject first.")
+            return
+        self.canvas.sync()
+        self.after_edit()
 
     def c_invert_colors(self):
         self.finalize_pending()
@@ -1574,6 +1621,30 @@ class Window(Gtk.ApplicationWindow):
         self.finalize_pending()
         from . import pagesetup as PS
         PS.page_setup_dialog(self)
+
+    def c_send_email(self, fmt="png"):
+        """File > Send in email: a new message in the mail app with this picture attached."""
+        import shutil
+        import subprocess
+        import tempfile
+        self.finalize_pending()
+        name = os.path.splitext(os.path.basename(self.path))[0] if self.path else "Untitled"
+        d = tempfile.mkdtemp(prefix="folio-share-")
+        path = os.path.join(d, name + "." + fmt)
+        try:
+            self.doc.save(path, E.FMT_ORA if fmt == "ora" else E.FMT_PNG)
+        except E.EngineError as e:
+            D.message(self, "Folio Draw couldn't make the attachment", str(e), Gtk.MessageType.ERROR)
+            return None
+        post = shutil.which("folio-post")
+        if post:
+            subprocess.Popen([post, "--attach", path])
+        elif shutil.which("xdg-email"):
+            subprocess.Popen(["xdg-email", "--subject", name, "--attach", path])
+        else:
+            D.message(self, "Sending needs a mail app", "Install Folio Post to send pictures in email.")
+            return None
+        return path
 
     def c_wallpaper(self):
         self.finalize_pending()

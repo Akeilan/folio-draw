@@ -328,6 +328,7 @@ class Ribbon(Gtk.Box):
         kt("home", self.crop_btn, "CR")
         kt("home", self.resize_btn, "RE")
         kt("home", self.rotate_btn, "RO")
+        kt("home", self.removebg_btn, "RB")
         kt("home", self.adjust_btn, "J")
         for tool, tip in (("pencil", "P"), ("fill", "F"), ("text", "T"), ("eraser", "E"), ("picker", "K"), ("zoom", "M")):
             kt("home", self.tool_buttons[tool], tip, pick=True)
@@ -473,6 +474,13 @@ class Ribbon(Gtk.Box):
         for b in (self.crop_btn, resize, rotate):
             col.pack_start(b, False, False, 0)
         img.pack_start(col, False, False, 0)
+        col2 = _box(True, 0)
+        self.removebg_btn = small_button("removebg", "Remove background",
+                                         "Remove background\nCut the subject out of its background, leaving it transparent.\n"
+                                         "With a selection, only the selected part is cut out.")
+        self.removebg_btn.connect("clicked", lambda *_: w.cmd("remove_background"))
+        col2.pack_start(self.removebg_btn, False, False, 0)
+        img.pack_start(col2, False, False, 0)
         adj_menu = make_menu([
             ("Brightness and contrast…", "brightness", lambda: w.cmd("adjust", "brightness")),
             ("Hue and saturation…", "huesat", lambda: w.cmd("adjust", "huesat")),
@@ -610,6 +618,40 @@ class Ribbon(Gtk.Box):
             self.stab_box.pack_start(r, False, False, 0)
             self.stab_scales.append(sc)
         sb.pack_start(self.stab_box, False, False, 0)
+        # pen pressure and tilt, kept for each brush, the pencil and the eraser
+        self.pen_box = _box(True, 2)
+        self.pen_box.pack_start(Gtk.Separator(), False, False, 4)
+        self.pen_title = Gtk.Label(xalign=0)
+        self.pen_title.get_style_context().add_class("fd-layers-title")
+        self.pen_box.pack_start(self.pen_title, False, False, 0)
+        self.pen_scales = []
+        for i, (name, tip) in enumerate((("Pressure: size", "How much a graphics tablet pen's pressure changes the width.\nAt 0% the width stays fixed."),
+                                         ("Pressure: opacity", "How much a graphics tablet pen's pressure changes how strong the colour goes on.\nAt 0% the colour stays solid."))):
+            r = _box(False, 6)
+            lab = Gtk.Label(label=name, xalign=0)
+            lab.set_size_request(110, -1)
+            sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+            sc.set_size_request(150, -1)
+            sc.set_value_pos(Gtk.PositionType.RIGHT)
+            sc.set_digits(0)
+            sc.get_style_context().add_class("fd-accent")
+            sc.connect("format-value", lambda _s, v: "%d%%" % v)
+            sc.connect("value-changed", lambda s_, i=i: (not self._sync) and w.cmd("pen", i, int(s_.get_value())))
+            r.set_tooltip_text(name + "\n" + tip)
+            r.pack_start(lab, False, False, 0)
+            r.pack_start(sc, True, True, 0)
+            self.pen_box.pack_start(r, False, False, 0)
+            self.pen_scales.append(sc)
+        self.pen_tilt = Gtk.CheckButton(label="Pen tilt turns the nib")
+        self.pen_tilt.set_tooltip_text("Pen tilt turns the nib\nThe calligraphy nib follows the direction the pen leans.")
+        self.pen_tilt.connect("toggled", lambda b: (not self._sync) and w.cmd("pen", 2, b.get_active()))
+        self.pen_box.pack_start(self.pen_tilt, False, False, 0)
+        self.pen_note = Gtk.Label(label="A mouse has no pressure; these apply to a graphics tablet pen.", xalign=0)
+        self.pen_note.get_style_context().add_class("dim-label")
+        self.pen_note.set_line_wrap(True)
+        self.pen_note.set_max_width_chars(36)
+        self.pen_box.pack_start(self.pen_note, False, False, 0)
+        sb.pack_start(self.pen_box, False, False, 0)
         sb.show_all()
         self.size_pop.add(sb)
         self.size_pop.connect("show", lambda *_: self._fill_size_presets())
@@ -750,6 +792,19 @@ class Ribbon(Gtk.Box):
             old, self._sync = self._sync, True
             for sc, v in zip(self.stab_scales, self.st.stabilizer[tool]):
                 sc.set_value(v)
+            self._sync = old
+        pk = self.win.pen_key()
+        self.pen_box.set_visible(pk is not None)
+        if pk is not None:
+            names = dict(BRUSHES)
+            names.update({"pencil": "Pencil", "eraser": "Eraser"})
+            self.pen_title.set_text("Pen pressure: " + names.get(pk, pk))
+            old, self._sync = self._sync, True
+            v = self.st.pen[pk]
+            self.pen_scales[0].set_value(v[0])
+            self.pen_scales[1].set_value(v[1])
+            self.pen_tilt.set_active(bool(v[2]))
+            self.pen_tilt.set_visible(pk in ("callig", "callig2"))
             self._sync = old
 
     def _fill_size_presets(self):

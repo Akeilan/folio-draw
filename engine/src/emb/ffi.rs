@@ -43,6 +43,14 @@ pub unsafe extern "C" fn fd_emb_get(p: *mut Doc) -> *mut c_char {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn fd_note(p: *mut Doc) -> *mut c_char {
+    match p.as_ref() {
+        Some(d) => out_str(d.note.clone()),
+        None => out_str(String::new()),
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn fd_emb_set(p: *mut Doc, s: *const c_char) {
     if let Some(d) = p.as_mut() {
         d.emb = cstr(s);

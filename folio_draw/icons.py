@@ -175,6 +175,27 @@ def i_crop(cr, ink, acc):
     cr.fill()
 
 
+def i_removebg(cr, ink, acc):
+    # a checkerboard behind a person's head and shoulders
+    cr.set_source_rgba(*ink, 0.35)
+    for yy in range(4):
+        for xx in range(4):
+            if (xx + yy) % 2 == 0:
+                cr.rectangle(3 + xx * 4.5, 3 + yy * 4.5, 4.5, 4.5)
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1)
+    cr.rectangle(2.5, 2.5, 19, 19)
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    cr.arc(12, 9.5, 3.6, 0, math.tau)
+    cr.fill()
+    cr.move_to(5, 21)
+    cr.curve_to(5, 15, 19, 15, 19, 21)
+    cr.close_path()
+    cr.fill()
+
+
 def i_resize(cr, ink, acc):
     cr.set_source_rgb(*acc)
     cr.rectangle(3, 11, 10, 10)
