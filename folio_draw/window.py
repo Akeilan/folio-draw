@@ -101,6 +101,8 @@ SEARCH_COMMANDS = [
     ("Fill holes", ("emb_fill_holes",), ""),
     ("Thread colour", ("emb_recolour",), ""), ("Delete shapes", ("emb_delete",), ""),
     ("Stitch properties", ("emb_stitch",), ""), ("Stop after shape", ("emb_stop",), ""),
+    ("Envelope (arch, bulge, wave)", ("emb_envelope",), ""), ("Knockdown", ("emb_knockdown",), ""),
+    ("Convert shapes to stitches", ("emb_to_stitches",), ""),
     ("Lettering", ("emb_lettering",), ""), ("Re-set traced letters as lettering", ("emb_reset_lettering",), ""), ("Embroidery preview", ("emb_preview",), ""),
     ("Colour sequence", ("emb_colours",), ""), ("Hoop and machine", ("emb_hoop",), ""),
     ("Import embroidery design", ("emb_import",), ""), ("Export embroidery (PES, DST)", ("emb_export",), "Ctrl+E"),

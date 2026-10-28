@@ -277,7 +277,24 @@ fn grow_into(rings: &[Ring], later: &Mask, d: f32) -> Vec<Ring> {
 struct Unit {
     thread: Thread,
     stop: bool,
+    /// keep this unit where it is (appliqué parts: their stops must follow them)
+    pin: bool,
     work: UnitWork,
+}
+
+/// The units one shape makes: usually one; appliqué makes three with stops between.
+fn shape_units(rings: Vec<Ring>, thread: Thread, st: &Settings, stop: bool, angle: f32) -> Vec<Unit> {
+    if st.kind == Kind::Applique {
+        let parts = super::stitch::applique_parts(&rings, st, angle);
+        let n = parts.len();
+        return parts
+            .into_iter()
+            .enumerate()
+            .map(|(k, stages)| Unit { thread: thread.clone(), stop: if k + 1 < n { true } else { stop }, pin: true, work: UnitWork::Shape { rings: rings.clone(), stages } })
+            .collect();
+    }
+    let (_, stages) = shape_stages(&rings, st, angle);
+    vec![Unit { thread, stop, pin: false, work: UnitWork::Shape { rings, stages } }]
 }
 
 enum UnitWork {
@@ -595,6 +612,7 @@ pub fn plan(design: &J) -> Plan {
                 let mut out = Vec::new();
                 for o in objs {
                     match o {
+                        Obj::Shape(sh) if sh.st.kind == Kind::Knockdown => out.push(Obj::Shape(sh)),
                         Obj::Shape(sh) => match subtract(&sh.rings, &cut) {
                             None => out.push(Obj::Shape(sh)),
                             Some(parts) => {
@@ -673,12 +691,11 @@ pub fn plan(design: &J) -> Plan {
                     match o {
                         Obj::Shape(sh) => {
                             let angle = sh.st.angle.unwrap_or_else(|| angle_for(&sh.thread, &mut colour_index));
-                            let (_, stages) = shape_stages(&sh.rings, &sh.st, angle);
-                            units.push(Unit { thread: sh.thread, stop: sh.stop, work: UnitWork::Shape { rings: sh.rings, stages } });
+                            units.extend(shape_units(sh.rings, sh.thread, &sh.st, sh.stop, angle));
                         }
                         Obj::Stitches { blocks } => {
                             for b in blocks {
-                                units.push(Unit { thread: b.thread, stop: b.stop, work: UnitWork::Stitches(b.cmds) });
+                                units.push(Unit { thread: b.thread, stop: b.stop, pin: false, work: UnitWork::Stitches(b.cmds) });
                             }
                         }
                     }
@@ -742,8 +759,7 @@ pub fn plan(design: &J) -> Plan {
                 let angle = sh.st.angle.unwrap_or_else(|| angle_for(&sh.thread, &mut colour_index));
                 let mut st = sh.st.clone();
                 st.kind = kinds[k];
-                let (_, stages) = shape_stages(&grown[k], &st, angle);
-                units.push(Unit { thread: sh.thread.clone(), stop: sh.stop, work: UnitWork::Shape { rings: grown[k].clone(), stages } });
+                units.extend(shape_units(grown[k].clone(), sh.thread.clone(), &st, sh.stop, angle));
             }
         }
     }
@@ -828,7 +844,7 @@ fn nearest_first(units: Vec<Unit>) -> Vec<Unit> {
         let mut j = i;
         while j < n {
             let u = units[j].as_ref().unwrap();
-            if u.thread != t || !matches!(u.work, UnitWork::Shape { .. }) {
+            if u.thread != t || !matches!(u.work, UnitWork::Shape { .. }) || u.pin {
                 break;
             }
             j += 1;
@@ -915,5 +931,27 @@ mod tests {
             }
         }
         assert!(p.stitch_count() > 1200, "{}", p.stitch_count());
+    }
+
+    #[test]
+    fn applique_stops_twice_and_knockdown_stays_whole() {
+        let d = parse(
+            r#"{"settings":{"hoop":[100,100]},"layers":[
+            {"objects":[{"rings":[[[-40,-40],[40,-40],[40,40],[-40,40]]],"thread":{"rgb":[240,240,240],"pec":29,"name":"White"},"type":"knockdown"}]},
+            {"objects":[{"rings":[[[-20,-20],[20,-20],[20,20],[-20,20]]],"thread":{"rgb":[237,23,31],"pec":5,"name":"Red"},"type":"applique"}]}
+            ]}"#,
+        )
+        .unwrap();
+        let p = plan(&d);
+        let names: Vec<(String, bool)> = p.blocks.iter().map(|b| (b.thread.name.clone(), b.stop)).collect();
+        assert_eq!(names, vec![("White".into(), false), ("Red".into(), true), ("Red".into(), true), ("Red".into(), false)], "{:?}", names);
+        // the knockdown is not cut under the appliqué
+        let inside = p.blocks[0].cmds.iter().filter(|c| c.2 == ST && c.0.abs() < 15.0 && c.1.abs() < 15.0).count();
+        assert!(inside > 50, "{inside}");
+        // placement and tack-down are running lines; the cover sits on the edge
+        let cover = &p.blocks[3];
+        let on_edge = cover.cmds.iter().filter(|c| c.2 == ST && ((c.0.abs() - 20.0).abs() < 2.0 || (c.1.abs() - 20.0).abs() < 2.0)).count();
+        let n = cover.cmds.iter().filter(|c| c.2 == ST).count();
+        assert!(on_edge as f32 > 0.8 * n as f32, "{on_edge} of {n}");
     }
 }

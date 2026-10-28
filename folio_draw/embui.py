@@ -252,7 +252,7 @@ class EmbUI:
         cr.stroke()
         # selection
         i, sp, objs = self.selected()
-        if self.drag and self.drag.get("kind") == "node":
+        if self.drag and self.drag.get("kind") in ("node", "stitchpt"):
             objs = [self.drag["obj"]]
         dx, dy = (0.0, 0.0)
         if self.drag and self.drag.get("kind") == "move":
@@ -279,6 +279,20 @@ class EmbUI:
             cr.set_line_width(1)
             cr.rectangle(math.floor(X0) + 0.5, math.floor(Y0) + 0.5, X1 - X0, Y1 - Y0)
             cr.stroke()
+            if self.mode == "nodes" and o.get("kind") == "stitches" and len(objs) == 1:
+                hp = max(1.5, HANDLE_PX - 1)
+                for bi, b in enumerate(o.get("blocks", [])):
+                    for pi, (x, y, c) in enumerate(b["pts"]):
+                        if c != M.ST:
+                            continue
+                        X, Y = scr(x, y)
+                        cr.rectangle(X - hp, Y - hp, 2 * hp, 2 * hp)
+                        sel = self.sel_node == ("s", bi, pi)
+                        cr.set_source_rgb(*((0.8, 0.1, 0.1) if sel else (1, 1, 1)))
+                        cr.fill_preserve()
+                        cr.set_source_rgb(0.5, 0, 0)
+                        cr.set_line_width(1)
+                        cr.stroke()
             if self.mode == "nodes" and o.get("rings") and len(objs) == 1:
                 for ri, ring in enumerate(o["rings"]):
                     for vi, (x, y) in enumerate(ring):
@@ -336,6 +350,44 @@ class EmbUI:
             self.drag = {"kind": "cut"}
             return
         i, sp, objs = self.selected()
+        if self.mode == "nodes" and len(objs) == 1 and objs[0].get("kind") == "stitches":
+            cv = self.win.canvas
+            s = self.settings()
+            o = objs[0]
+            for bi, b in enumerate(o.get("blocks", [])):
+                for pi, (vx, vy, c) in enumerate(b["pts"]):
+                    if c != M.ST:
+                        continue
+                    X, Y = cv.to_screen(*M.mm_to_px(s, vx, vy))
+                    if abs(X - ev.x) <= HANDLE_PX + 1 and abs(Y - ev.y) <= HANDLE_PX + 1:
+                        self.sel_node = ("s", bi, pi)
+                        self.drag = {"kind": "stitchpt", "block": bi, "pt": pi, "start": (mx, my), "layer": i, "spec": sp, "obj": o}
+                        self.win.canvas.area.queue_draw()
+                        self.win.hint("Drag the needle point, or Delete to take it out.", 6)
+                        return
+            if dbl:
+                best = None
+                tol = max(0.3, 6 / (cv.z * M.PX_PER_MM))
+                for bi, b in enumerate(o.get("blocks", [])):
+                    pts = b["pts"]
+                    for k in range(1, len(pts)):
+                        if pts[k][2] != M.ST or pts[k - 1][2] == M.TRIM:
+                            continue
+                        ax, ay = pts[k - 1][0], pts[k - 1][1]
+                        bx, by = pts[k][0], pts[k][1]
+                        vx, vy = bx - ax, by - ay
+                        l2 = vx * vx + vy * vy
+                        t = 0 if l2 < 1e-12 else max(0.0, min(1.0, ((mx - ax) * vx + (my - ay) * vy) / l2))
+                        dd = math.hypot(ax + vx * t - mx, ay + vy * t - my)
+                        if dd < tol and (best is None or dd < best[0]):
+                            best = (dd, bi, k, (ax + vx * t, ay + vy * t))
+                if best:
+                    _, bi, k, q = best
+                    o["blocks"][bi]["pts"].insert(k, [q[0], q[1], M.ST])
+                    self.sel_node = ("s", bi, k)
+                    self.store(i, sp, "Add stitch")
+                    self.changed("Add stitch")
+                    return
         if self.mode == "nodes" and len(objs) == 1 and objs[0].get("rings"):
             cv = self.win.canvas
             s = self.settings()
@@ -423,6 +475,10 @@ class EmbUI:
             self.drag["dmm"] = (mx - sx, my - sy)
         elif k == "marquee":
             self.marquee = (self.drag["start"], (mx, my))
+        elif k == "stitchpt":
+            self.drag["at"] = (mx, my)
+            pt = self.drag["obj"]["blocks"][self.drag["block"]]["pts"][self.drag["pt"]]
+            pt[0], pt[1] = mx, my
         elif k == "node":
             self.drag["at"] = (mx, my)
             self.drag["obj"]["rings"][self.drag["ring"]][self.drag["vertex"]] = [mx, my]
@@ -445,6 +501,10 @@ class EmbUI:
             self.marquee = None
             if abs(bx - ax) > 0.2 or abs(by - ay) > 0.2:
                 self.box_select(min(ax, bx), min(ay, by), max(ax, bx), max(ay, by), add=d.get("add"))
+        elif k == "stitchpt":
+            if "at" in d:
+                self.store(d["layer"], d["spec"], "Move stitch")
+                self.changed("Move stitch")
         elif k == "node":
             if "at" in d:
                 self.store(d["layer"], d["spec"], "Move node")
@@ -463,7 +523,10 @@ class EmbUI:
             return False
         if name in ("Delete", "BackSpace") and self.sel:
             if self.mode == "nodes" and self.sel_node is not None:
-                self.c_emb_delete_node()
+                if self.sel_node[0] == "s":
+                    self.c_emb_delete_stitch()
+                else:
+                    self.c_emb_delete_node()
             elif self.sel_hole is not None:
                 self.c_emb_fill_holes()
             else:
@@ -616,6 +679,11 @@ class EmbUI:
         col = _box(True, 0)
         col.pack_start(small("stitch", "props", "Properties", "Angle, density, underlay and pull compensation", "emb_stitch"), False, False, 0)
         col.pack_start(small("stop", "stopsign", "Stop After", "Stop the machine after the selected shapes", "emb_stop"), False, False, 0)
+        col.pack_start(small("tostitches", "tostitches", "To Stitches", "Freeze the selected shapes into stitches, to edit needle point by needle point", "emb_to_stitches"), False, False, 0)
+        stb.pack_start(col, False, False, 0)
+        col = _box(True, 0)
+        col.pack_start(small("envelope", "envelope", "Envelope", "Bend the selected shapes or lettering: arch, bulge, pinch, wave, slant", "emb_envelope"), False, False, 0)
+        col.pack_start(small("knockdown", "knockdown", "Knockdown", "A light net under the design so towel or fleece pile lies flat", "emb_knockdown"), False, False, 0)
         stb.pack_start(col, False, False, 0)
         row.pack_start(group("Stitches", stb), False, False, 2)
         row.pack_start(sep(), False, False, 0)
@@ -655,7 +723,9 @@ class EmbUI:
             self.buttons[k].set_sensitive(has)
         for k in ("stitch", "type"):
             self.buttons[k].set_sensitive(bool(shapes))
-        self.buttons["nodes"].set_sensitive(len(objs) == 1 and bool(objs[0].get("rings")))
+        self.buttons["nodes"].set_sensitive(len(objs) == 1 and (bool(objs[0].get("rings")) or objs[0].get("kind") == "stitches"))
+        self.buttons["tostitches"].set_sensitive(any(o.get("kind") != "stitches" for o in objs))
+        self.buttons["envelope"].set_sensitive(any(o.get("kind") != "stitches" for o in objs))
         self.buttons["reset"].set_sensitive(bool([o for o in objs if o.get("rings")]))
         self.buttons["fillholes"].set_sensitive(any(len(o.get("rings", [])) > 1 for o in objs))
         self.buttons["merge"].set_sensitive(len([o for o in objs if o.get("rings")]) >= 2)
@@ -888,8 +958,21 @@ class EmbUI:
 
     def c_emb_nodes(self):
         i, sp, objs = self.selected()
+        if len(objs) == 1 and objs[0].get("kind") == "stitches":
+            o = objs[0]
+            if o.get("transform"):
+                # bake the move / rotate / mirror / scale in, so the points edit where they show
+                o["blocks"] = M.transformed_stitches(o)["blocks"]
+                o["transform"] = {}
+                self.store(i, sp, "Edit stitches")
+            self.win.state.tool = "emb"
+            self.mode = "select" if self.mode == "nodes" else "nodes"
+            self.win.canvas.area.queue_draw()
+            if self.mode == "nodes":
+                self.win.hint("Edit stitches: drag a needle point, Delete takes it out, double-click a stitch adds one. Esc when done.", 8)
+            return
         if len(objs) != 1 or not objs[0].get("rings"):
-            self.win.hint("Select one shape to edit its nodes.", 5)
+            self.win.hint("Select one shape (or one stitch design) to edit its nodes.", 5)
             return
         self.win.state.tool = "emb"
         self.mode = "select" if self.mode == "nodes" else "nodes"
@@ -918,6 +1001,117 @@ class EmbUI:
         self.sel_node = None
         self.store(i, sp, "Delete node")
         self.changed("Delete node")
+
+    def c_emb_delete_stitch(self):
+        i, sp, objs = self.selected()
+        if len(objs) != 1 or not self.sel_node or self.sel_node[0] != "s":
+            return
+        _, bi, pi = self.sel_node
+        pts = objs[0]["blocks"][bi]["pts"]
+        if pi < len(pts):
+            del pts[pi]
+        if not any(p[2] == M.ST for p in pts):
+            del objs[0]["blocks"][bi]
+        self.sel_node = None
+        self.store(i, sp, "Delete stitch")
+        self.changed("Delete stitch")
+
+    def c_emb_to_stitches(self):
+        """Freeze the selected shapes into stitches, to edit needle point by needle point. They no
+        longer re-stitch when they are resized or reshaped."""
+        i, sp, objs = self.selected()
+        shapes = [o for o in objs if o.get("kind") != "stitches"]
+        if not shapes:
+            self.win.hint("Select the shapes to turn into stitches.", 5)
+            return
+        hw, hh = M.hoop_mm(self.settings())
+        st = self.settings()
+        sub = {"kind": M.SHAPES_KIND, "objects": shapes}
+        layer = {"objects": []}
+        # the planner takes the design layer by layer: plan these shapes alone
+        import json as _json
+        tmp = _json.loads(_json.dumps(M.design_json_for([sub], st)))
+        p = M.Plan.make(tmp)
+        blocks = p.blocks_json().get("blocks", [])
+        if not blocks:
+            return
+        ids = {o["id"] for o in shapes}
+        new = {"id": M.new_object_id(sp), "kind": "stitches", "blocks": blocks, "transform": {}, "source": "shapes"}
+        out = []
+        placed = False
+        for o in sp["objects"]:
+            if o["id"] in ids:
+                if not placed:
+                    out.append(new)
+                    placed = True
+                continue
+            out.append(o)
+        sp["objects"] = out
+        self.store(i, sp, "Convert to stitches")
+        self.select(i, [new["id"]])
+        self.changed("Convert to stitches")
+        _ = (hw, hh, layer)
+        self.win.hint("%d stitches: Edit Nodes now moves single needle points. They won't re-stitch if you resize them." % p.stitches, 8)
+
+    def c_emb_envelope(self, env=None):
+        """Bend the selected shapes or lettering: arch, bulge, pinch, wave or slant."""
+        i, sp, objs = self.selected()
+        objs = [o for o in objs if o.get("kind") != "stitches"]
+        if not objs:
+            self.win.hint("Select shapes or lettering first.", 5)
+            return
+        if env is None:
+            cur = objs[0].get("envelope") if objs[0].get("kind") == "lettering" else None
+            env = ED.envelope(self.win, cur)
+            if not env:
+                return
+        shapes_only = [o for o in objs if o.get("kind") != "lettering"]
+        if shapes_only:
+            b = M.bounds_of([r for o in shapes_only for r in [o["rings"]]])
+            for o in shapes_only:
+                o["rings"] = M.warp_rings(o["rings"], env, b)
+        for o in objs:
+            if o.get("kind") == "lettering":
+                o["envelope"] = dict(env)
+                M.regen_lettering(o)
+        self.store(i, sp, "Envelope")
+        self.changed("Envelope")
+
+    def c_emb_knockdown(self):
+        """A knockdown under the design (or the selected shapes): a light net, in a thread near
+        the fabric, sewn first on a layer of its own so pile fabric lies flat under the stitches."""
+        doc = self.win.doc
+        i, sp, objs = self.selected()
+        src = [o for o in objs if o.get("rings")] if objs else []
+        if not src:
+            for li in M.shape_layers(doc):
+                for o in self.spec(li).get("objects", []):
+                    if o.get("rings") and (o.get("stitch") or {}).get("type") != "knockdown":
+                        src.append(o)
+                    elif o.get("kind") == "lettering":
+                        src.extend({"rings": g} for g in o.get("glyphs", []))
+        if not src:
+            self.win.hint("There is nothing to put a knockdown under yet.", 5)
+            return
+        res = M.shapes_op({"op": "union", "shapes": [o["rings"] for o in src]})
+        parts = res.get("shapes", [])
+        grown = []
+        for part in parts:
+            g = M.shapes_op({"op": "offset", "rings": part, "d": 2.0}).get("shapes", [])
+            grown.extend(g)
+        if not grown:
+            return
+        fab = self.settings().get("fabric", [244, 239, 226])
+        thread = M.nearest_thread(fab)
+        # one layer at the bottom, just above the picture and fabric layers
+        bottom = M.shape_layers(doc)
+        doc.set_active(max(0, (bottom[0] - 1) if bottom else doc.layer_count() - 1))
+        spec = {"kind": M.SHAPES_KIND, "objects": [], "next_id": 1}
+        for part in grown:
+            spec["objects"].append({"id": M.new_object_id(spec), "rings": part, "thread": thread, "stitch": {"type": "knockdown"}})
+        M.add_shape_layer(doc, "Knockdown", spec, self.settings())
+        self.changed("Knockdown")
+        self.win.hint("Knockdown added under the design in %s: it stays whole under everything above." % M.thread_label(thread), 8)
 
     def c_emb_fill_holes(self):
         """Fill the selected hole, or every hole of the selected shapes: a ring becomes solid."""
