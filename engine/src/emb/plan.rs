@@ -694,7 +694,15 @@ pub fn plan(design: &J) -> Plan {
                         sh.st.kind
                     } else {
                         let m = super::stitch::shape_mask(&sh.rings, 0.5);
-                        super::stitch::auto_kind(super::stitch::inscribed_width(&m))
+                        let k = super::stitch::auto_kind(super::stitch::inscribed_width(&m));
+                        // small traced pieces (letters, marks) fan out as satin: fill holds their
+                        // shape better, as with lettering under 8 mm
+                        let b = bbox(&sh.rings);
+                        if k == Kind::Satin && (b.2 - b.0).max(b.3 - b.1) < 6.0 {
+                            Kind::Fill
+                        } else {
+                            k
+                        }
                     }
                 })
                 .collect();

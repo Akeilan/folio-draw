@@ -157,3 +157,33 @@ def lettering_shapes(obj):
 def default_type(cap):
     """Under 8 mm cap height fill beats satin for lettering built from outlines."""
     return "fill" if cap < 8.0 else "satin"
+
+
+def fit_circle(pts):
+    """Least-squares circle through points: (cx, cy, r, rms) or None."""
+    n = len(pts)
+    if n < 3:
+        return None
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    suu = svv = suv = suuu = svvv = suvv = svuu = 0.0
+    for x, y in pts:
+        u, v = x - mx, y - my
+        suu += u * u
+        svv += v * v
+        suv += u * v
+        suuu += u * u * u
+        svvv += v * v * v
+        suvv += u * v * v
+        svuu += v * u * u
+    det = suu * svv - suv * suv
+    if abs(det) < 1e-9:
+        return None
+    a = 0.5 * (suuu + suvv)
+    b = 0.5 * (svvv + svuu)
+    uc = (a * svv - b * suv) / det
+    vc = (b * suu - a * suv) / det
+    cx, cy = uc + mx, vc + my
+    r = math.sqrt(uc * uc + vc * vc + (suu + svv) / n)
+    rms = math.sqrt(sum((math.hypot(x - cx, y - cy) - r) ** 2 for x, y in pts) / n)
+    return cx, cy, r, rms

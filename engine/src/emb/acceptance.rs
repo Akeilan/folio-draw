@@ -265,7 +265,9 @@ fn doubling_regenerates_density() {
         eprintln!("scale {k}: {} stitches, {} jumps, {} trims, blocks {:?}", p.stitch_count(), p.count(JUMP), p.count(super::plan::TRIM),
             p.blocks.iter().map(|b| (b.thread.name.clone(), b.cmds.iter().filter(|c| c.2 == ST).count())).collect::<Vec<_>>());
     }
-    assert!((2.8..=5.0).contains(&r), "ratio {r:.2}");
+    // fills grow with the area (4×), satin columns with the length (2×): the stand-in logo is
+    // half satin, so its mix sits near 2.8; stretched stitches would stay at 1×
+    assert!((2.5..=5.0).contains(&r), "ratio {r:.2}");
 }
 
 #[test]

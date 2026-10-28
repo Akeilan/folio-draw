@@ -357,7 +357,7 @@ class Ribbon(Gtk.Box):
         kt("text", self.text_done_btn, "D")
         eb = self.win.emb.buttons
         for key, tip in (("place", "P"), ("trace", "C"), ("tool", "S"), ("nodes", "N"), ("merge", "M"), ("split", "SP"), ("fillholes", "FH"),
-                         ("recolour", "T"), ("delete", "D"), ("type", "Y"), ("stitch", "R"), ("stop", "O"), ("lettering", "L"),
+                         ("recolour", "T"), ("delete", "D"), ("type", "Y"), ("stitch", "R"), ("stop", "O"), ("lettering", "L"), ("reset", "RL"),
                          ("preview", "V"), ("colours", "Q"), ("hoop", "H"), ("import", "I"), ("export", "E"), ("template", "TP"),
                          ("mirror", "MI")):
             kt("embroidery", eb[key], tip)

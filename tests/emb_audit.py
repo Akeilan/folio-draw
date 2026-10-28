@@ -116,6 +116,30 @@ blocks = ui.blocks()
 check(blocks and blocks[0]["thread"]["name"] == "White", "first thread White")
 check(len(ui.pane.rows) == len(blocks), "colour sequence lists %d blocks" % len(blocks))
 
+# ---- re-set traced letters as real lettering, on their arc and at their size
+import math  # noqa: E402
+got = ui.box_select(-45, -48, 45, -22)
+li_white = layers[0]
+before_n = len(ui.spec(li_white)["objects"])
+geo = ui.lettering_geometry(ui.selected()[2])
+check(geo and geo[0] == "top", "the traced top letters are found to sit on an arc (%s)" % (geo[0] if geo else None))
+_lettering = ED.lettering
+ED.lettering = lambda parent, init=None: dict(init, text="DEMOCRATIC SOCIALISTS", font="Sans Bold")
+lo = ui.c_emb_reset_lettering()
+ED.lettering = _lettering
+check(lo and lo["kind"] == "lettering" and lo["arc"] == "top", "re-set as arc lettering")
+check(len(ui.spec(li_white)["objects"]) == before_n - got, "the %d traced letters are gone" % got)
+if lo and geo:
+    rads = [math.hypot(sum(p[0] for p in g[0]) / len(g[0]) - lo["x"], sum(p[1] for p in g[0]) / len(g[0]) - lo["y"]) for g in lo["glyphs"]]
+    check(abs(sum(rads) / len(rads) - geo[3]) < 1.5, "the new letters sit where the traced ones were (radius %.1f vs %.1f mm, cap %.1f mm)" % (
+        sum(rads) / len(rads), geo[3], lo["cap"]))
+snap(win, "emb_reset_lettering")
+win.c_undo()
+win.c_undo()
+win.c_undo()
+check(len(ui.spec(li_white)["objects"]) == before_n, "undo brings the traced letters back")
+ui.select(None, [])
+
 # ---- EMB-05 erase the traced top lettering by box-select
 n0 = len(sp["objects"])
 win.state.tool = "emb"

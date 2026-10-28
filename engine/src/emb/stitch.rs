@@ -346,9 +346,18 @@ fn finish_rail(r: &Rail, st: &Settings) -> (f32, f32) {
 }
 
 fn satin_chain(path: &[Pt], rings: &[Ring], dist: &dyn Fn(Pt) -> f32, st: &Settings) -> Option<(Vec<Pt>, Vec<(Pt, Pt)>, f32)> {
-    let rails = rails_for(path, rings, dist, st.satin_spacing * 0.5, st);
+    let mut rails = rails_for(path, rings, dist, st.satin_spacing * 0.5, st);
     if rails.len() < 2 {
         return None;
+    }
+    // where columns meet, rays run off along the other column and the stitches fan out: no
+    // side may reach past 1.5× the column's usual half width (the junction gets a small fill)
+    let mut halves: Vec<f32> = rails.iter().flat_map(|r| [r.l, r.r]).collect();
+    halves.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let cap = halves[halves.len() / 2] * 1.5 + 0.1;
+    for r in rails.iter_mut() {
+        r.l = r.l.min(cap);
+        r.r = r.r.min(cap);
     }
     let ends: Vec<(Pt, Pt)> = rails
         .iter()
@@ -395,6 +404,190 @@ fn quads_mask(m: &Mask, ends: &[(Pt, Pt)]) -> Mask {
     cov
 }
 
+/// Square up a column's ends. The skeleton bends near its ends (into a junction, toward a
+/// corner of the stroke's end), and rails square to a bend fan out; so each end keeps the
+/// direction of the straight part behind it and runs on in that line to the outline.
+pub fn column_ends(path: &[Pt], dist: &dyn Fn(Pt) -> f32) -> Vec<Pt> {
+    let step = 0.05;
+    let pts = resample(path, step);
+    let n = pts.len();
+    if n < 8 {
+        return path.to_vec();
+    }
+    let mut sorted: Vec<f32> = pts.iter().map(|p| dist(*p)).collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let med = sorted[n / 2].max(0.1);
+    let w = 2.0 * med;
+    // half a column width in from each end (less on short columns)
+    let k1 = (((w * 0.5) / step) as usize).min(n / 6).max(2);
+    let k2 = 2 * k1;
+    if n < 2 * k2 + 4 {
+        return path.to_vec();
+    }
+    let run = |from: Pt, d: Pt| -> Vec<Pt> {
+        let mut out = Vec::new();
+        let mut cur = from;
+        for _ in 0..((3.0 * w / step) as usize) {
+            let nx = add(cur, mul(d, step));
+            if dist(nx) < 0.15 {
+                break;
+            }
+            cur = nx;
+            out.push(cur);
+        }
+        out
+    };
+    let d_end = norm(sub(pts[n - 1 - k1], pts[n - 1 - k2]));
+    let d_start = norm(sub(pts[k1], pts[k2]));
+    let mut out: Vec<Pt> = run(pts[k1], d_start).into_iter().rev().collect();
+    out.extend_from_slice(&pts[k1..n - k1]);
+    out.extend(run(pts[n - 1 - k1], d_end));
+    if out.len() < 4 {
+        return path.to_vec();
+    }
+    out
+}
+
+fn line_meet(p: Pt, d: Pt, q: Pt, e: Pt) -> Option<Pt> {
+    let den = cross(d, e);
+    if den.abs() < 0.2 {
+        return None; // nearly parallel: no corner to square off
+    }
+    let t = cross(sub(q, p), e) / den;
+    Some(add(p, mul(d, t)))
+}
+
+/// Split a centre line at its sharp corners (turns over 50° within about a column width) into
+/// straight pieces. At each corner the incoming column runs on to the far edge of the outgoing
+/// one, and the outgoing column starts at the incoming one's inner edge: a butt joint, so the
+/// corner square is sewn once, by straight stitches.
+pub fn split_corners(path: &[Pt], dist: &dyn Fn(Pt) -> f32, width: f32) -> Vec<Vec<Pt>> {
+    let step = 0.1;
+    let mut pts = resample(path, step);
+    let n0 = pts.len();
+    if n0 < 8 {
+        return vec![path.to_vec()];
+    }
+    let closed = dist_pts(pts[0], pts[n0 - 1]) < 0.15;
+    let span = (width.max(0.8) / step).round().max(3.0) as usize;
+    let turn = |pts: &Vec<Pt>, i: usize, closed: bool| -> f32 {
+        let n = pts.len();
+        let (a, b) = if closed {
+            (pts[(i + n - 1 - span % (n - 1)) % (n - 1)], pts[(i + span) % (n - 1)])
+        } else {
+            if i < span || i + span >= n {
+                return 0.0;
+            }
+            (pts[i - span], pts[i + span])
+        };
+        let d0 = norm(sub(pts[i], a));
+        let d1 = norm(sub(b, pts[i]));
+        dot(d0, d1).clamp(-1.0, 1.0).acos()
+    };
+    let limit = 50f32.to_radians();
+    let find = |pts: &Vec<Pt>, closed: bool| -> Vec<usize> {
+        let n = if closed { pts.len() - 1 } else { pts.len() };
+        let t: Vec<f32> = (0..n).map(|i| turn(pts, i, closed)).collect();
+        let mut out: Vec<usize> = Vec::new();
+        let mut i = 0;
+        while i < n {
+            if t[i] > limit {
+                // the sharpest point of this bend
+                let mut j = i;
+                let mut best = i;
+                while j < n && t[j] > limit {
+                    if t[j] > t[best] {
+                        best = j;
+                    }
+                    j += 1;
+                }
+                if out.last().map_or(true, |&l| best - l > 2 * span) {
+                    out.push(best);
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        out
+    };
+    let mut corners = find(&pts, closed);
+    if corners.is_empty() {
+        return vec![path.to_vec()];
+    }
+    if closed {
+        // start the loop at its first corner, so every corner sits between two pieces
+        let c0 = corners[0];
+        let n = pts.len() - 1;
+        let mut r: Vec<Pt> = (0..=n).map(|k| pts[(c0 + k) % n]).collect();
+        r[n] = r[0];
+        pts = r;
+        corners = find(&pts, false).into_iter().filter(|&c| c > span && c + span < pts.len()).collect();
+        let mut cs = vec![0];
+        cs.extend(corners);
+        cs.push(pts.len() - 1);
+        return butt_pieces(&pts, &cs, dist, span, true);
+    }
+    let mut cs = vec![0];
+    cs.extend(corners.into_iter().filter(|&c| c > span && c + span < pts.len()));
+    cs.push(pts.len() - 1);
+    butt_pieces(&pts, &cs, dist, span, false)
+}
+
+fn dist_pts(a: Pt, b: Pt) -> f32 {
+    dist(a, b)
+}
+
+fn butt_pieces(pts: &[Pt], cs: &[usize], dist: &dyn Fn(Pt) -> f32, span: usize, closed: bool) -> Vec<Vec<Pt>> {
+    // corners are cs[1..len-1] (and, closed, cs[0] == cs[last] too)
+    let k = cs.len() - 1;
+    let mut pieces: Vec<Vec<Pt>> = (0..k).map(|i| pts[cs[i]..=cs[i + 1]].to_vec()).collect();
+    let corner_ids: Vec<usize> = if closed { (0..k).collect() } else { (1..k).collect() };
+    for &ci in &corner_ids {
+        // between piece a (ending at the corner) and piece b (starting there)
+        let (a, b) = if ci == 0 { (k - 1, 0) } else { (ci - 1, ci) };
+        let (pa, pb) = (&pieces[a], &pieces[b]);
+        if pa.len() < 2 * span + 2 || pb.len() < 2 * span + 2 {
+            continue;
+        }
+        let a1 = pa[pa.len() - 1 - span];
+        let a0 = pa[pa.len() - 1 - 2 * span.min((pa.len() - 1) / 2 - 1).max(1)];
+        let b1 = pb[span];
+        let b2 = pb[(2 * span).min(pb.len() - 1)];
+        let da = norm(sub(a1, a0));
+        let db = norm(sub(b2, b1));
+        let Some(x) = line_meet(a1, da, b1, db) else { continue };
+        let corner = pa[pa.len() - 1];
+        let ra = dist(a1).max(0.2);
+        let rb = dist(b1).max(0.2);
+        if dist_pts(x, corner) > 3.0 * (ra + rb) {
+            continue;
+        }
+        // a right-angle turn gets a butt joint; a sharp point (an M or A apex) just meets at
+        // the point. Either way the ends stay inside the shape, or their stitches would stick out
+        let sharp = dot(da, db) < -0.34; // turned by more than ~110°
+        let inside_end = |from: Pt, to: Pt| -> Pt {
+            let mut q = to;
+            for _ in 0..40 {
+                if dist(q) > 0.1 {
+                    return q;
+                }
+                q = lerp(q, from, 0.1);
+            }
+            from
+        };
+        let a_end = inside_end(a1, if sharp { x } else { add(x, mul(da, rb)) });
+        let b_start = inside_end(b1, if sharp { x } else { add(x, mul(db, ra)) });
+        let mut na: Vec<Pt> = pa[..pa.len() - span].to_vec();
+        na.push(a_end);
+        let mut nb: Vec<Pt> = vec![b_start];
+        nb.extend_from_slice(&pb[span..]);
+        pieces[a] = na;
+        pieces[b] = nb;
+    }
+    pieces
+}
+
 /// Satin for a shape: centre lines, rails clamped to the outline, coverage check (under 75 %
 /// falls back to fill), residual patches as small fills sewn first.
 pub fn satin_stages(rings: &[Ring], m: &Mask, st: &Settings, width: f32, fill_angle: f32) -> Option<Stages> {
@@ -408,7 +601,15 @@ pub fn satin_stages(rings: &[Ring], m: &Mask, st: &Settings, width: f32, fill_an
         dvals[j as usize * m.w + i as usize]
     };
     let spur = (0.7 * width).max(0.8);
-    let paths: Vec<Vec<Pt>> = centre_lines(m, spur).into_iter().filter(|p| p.len() >= 2 && path_length(p) > 0.2).collect();
+    let raw: Vec<Vec<Pt>> = centre_lines(m, spur).into_iter().filter(|p| p.len() >= 2 && path_length(p) > 0.2).collect();
+    // sharp corners: a column turned through a right angle fans its stitches into a starburst,
+    // so it is cut into straight columns that meet with a butt joint
+    let paths: Vec<Vec<Pt>> = raw
+        .iter()
+        .flat_map(|p| split_corners(p, &dist, width))
+        .map(|p| column_ends(&p, &dist))
+        .filter(|p| p.len() >= 2 && path_length(p) > 0.2)
+        .collect();
     if paths.is_empty() {
         return None;
     }
@@ -551,6 +752,40 @@ mod tests {
         assert!(runs.len() >= 3, "{}", runs.len());
     }
     #[test]
+    fn right_angle_column_is_split() {
+        // an L of 2 mm columns: two straight pieces meeting square, no fan at the corner
+        let l: Ring = vec![(0.0, 0.0), (20.0, 0.0), (20.0, 2.0), (2.0, 2.0), (2.0, 20.0), (0.0, 20.0)];
+        let m = shape_mask(&[l.clone()], 0.5);
+        let dv = m.inside_mm();
+        let dist = |p: Pt| -> f32 {
+            let i = ((p.0 - m.x0) * m.s).floor();
+            let j = ((p.1 - m.y0) * m.s).floor();
+            if i < 0.0 || j < 0.0 || i >= m.w as f32 || j >= m.h as f32 {
+                return 0.0;
+            }
+            dv[j as usize * m.w + i as usize]
+        };
+        let paths = centre_lines(&m, 1.4);
+        let pieces: Vec<Vec<Pt>> = paths.iter().flat_map(|p| split_corners(p, &dist, 2.0)).collect();
+        assert_eq!(pieces.len(), 2, "{}", pieces.len());
+        // each piece is straight: its points stay close to the line through its ends
+        for p in &pieces {
+            let (a, b) = (p[0], *p.last().unwrap());
+            let worst = p.iter().map(|q| dist_to_segment(*q, a, b)).fold(0.0, f32::max);
+            assert!(worst < 0.2, "piece bends by {worst}");
+        }
+        let (k, st) = shape_stages(&[l], &Settings::default(), 45.0);
+        assert_eq!(k, Kind::Satin);
+        // no satin stitch longer than the column is wide (plus pull): a fan would be
+        for stage in &st {
+            for run in stage.iter().filter(|r| r.top) {
+                let long = run.pts.windows(2).filter(|w| super::dist(w[0], w[1]) > 3.2).count();
+                assert!(long <= 2, "{long} long stitches");
+            }
+        }
+    }
+
+    #[test]
     fn auto_picks_by_width() {
         let (k, st) = shape_stages(&[vec![(0.0, 0.0), (30.0, 0.0), (30.0, 3.0), (0.0, 3.0)]], &Settings::default(), 45.0);
         assert_eq!(k, Kind::Satin);
@@ -612,3 +847,5 @@ mod debug2 {
         }
     }
 }
+
+
