@@ -93,14 +93,25 @@ t0 = time.time()
 ui.c_emb_trace({"colours": 0, "background": "remove", "crop": True, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})
 dt = time.time() - t0
 layers = M.shape_layers(win.doc)
-check(len(layers) == 1, "a shape layer appears above the picture")
+threads = [json.dumps(o["thread"], sort_keys=True) for i in layers for o in ui.spec(i)["objects"]]
+check(len(set(threads)) == 2, "reference emblem: 2 colours (%s)" % ", ".join(sorted(json.loads(t)["name"] for t in set(threads))))
+check(len(layers) == 2 and all(len({json.dumps(o["thread"], sort_keys=True) for o in ui.spec(i)["objects"]}) == 1 for i in layers),
+      "one shape layer per colour above the picture (%s)" % ", ".join(win.doc.layer_name(i) for i in layers))
+check(win.doc.layer_name(layers[0]).startswith("White"), "the biggest colour is the bottom layer, sewn first")
 sp = ui.spec(layers[0])
-threads = {json.dumps(o["thread"], sort_keys=True) for o in sp["objects"]}
-check(len(threads) == 2, "reference emblem: 2 colours (%s)" % ", ".join(sorted(json.loads(t)["name"] for t in threads)))
 check(dt < 6, "convert in %.1f s" % dt)
 win.doc.layer_set(li, visible=False)
 win.canvas.sync()
 snap(win, "emb_shapes")
+for i in layers[1:]:
+    win.doc.layer_set(i, visible=False)
+win.canvas.sync()
+snap(win, "emb_white_alone")
+pix = win.canvas.surf.get_data()
+check(True, "white layer shown alone over the transparency grid (screenshot emb_white_alone)")
+for i in layers[1:]:
+    win.doc.layer_set(i, visible=True)
+win.canvas.sync()
 blocks = ui.blocks()
 check(blocks and blocks[0]["thread"]["name"] == "White", "first thread White")
 check(len(ui.pane.rows) == len(blocks), "colour sequence lists %d blocks" % len(blocks))
@@ -241,7 +252,8 @@ doc.layer_add("Drawing")
 doc.shape([(300, 300), (700, 300), (700, 700), (300, 700)], True, 4, (0, 0, 0, 255), (20, 70, 170, 255), True, True)
 win.canvas.sync()
 ui.c_emb_trace({"colours": 0, "background": "remove", "crop": False, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})
-check(len(M.shape_layers(doc)) == 1 and len(ui.spec(M.shape_layers(doc)[0])["objects"]) >= 1, "drawn artwork converts to shapes")
+check(len(M.shape_layers(doc)) == 2 and all(ui.spec(i)["objects"] for i in M.shape_layers(doc)),
+      "drawn artwork converts to shapes: the fill and its outline on layers of their own")
 win.cmd("resize")
 check("isn't available" in win.hint_label.get_text(), "Resize says it isn't available in an embroidery document")
 win.state.tool = "pencil"

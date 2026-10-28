@@ -194,12 +194,12 @@ class EmbUI:
 
     # ------------------------------------------------------------------ canvas drawing
     def draw_under(self, cr, ox, oy, z):
-        s = self.settings()
-        doc = self.win.doc
-        r, g, b = [v / 255 for v in s.get("fabric", [244, 239, 226])]
-        cr.set_source_rgb(r, g, b)
-        cr.rectangle(ox, oy, doc.width * z, doc.height * z)
-        cr.fill()
+        # the transparency grid, as for any picture: shapes of every colour (white too) show
+        # against it, and a layer shown alone shows nothing else. The fabric colour is the
+        # preview's.
+        cv = self.win.canvas
+        cr.set_source(cv._checker_pattern(ox, oy))
+        cr.paint()
 
     def draw_over(self, cr):
         cv = self.win.canvas
@@ -733,52 +733,49 @@ class EmbUI:
             win.hint("No shapes came out: the picture may be all background.", 8)
             return
         src_id = doc.layer_props(li)["id"]
-        # the shape layer made from this picture before
-        existing = None
-        for i in M.shape_layers(doc):
-            sp = self.spec(i)
-            if sp.get("source") == src_id:
-                existing = i
         group_id = "pic%d" % src_id
-        spec = {"kind": M.SHAPES_KIND, "source": src_id, "objects": [], "next_id": 1, "edited": False}
+        # one layer per colour, the biggest colour at the bottom (sewn first)
+        by_thread = {}
         for sh in shapes:
-            o = {"id": M.new_object_id(spec), "rings": sh["rings"], "thread": sh["thread"], "group": group_id}
-            spec["objects"].append(o)
-        if existing is not None:
-            esp = self.spec(existing)
-            if esp.get("edited"):
+            key = json.dumps(sh["thread"], sort_keys=True)
+            by_thread.setdefault(key, []).append(sh)
+        colours = sorted(by_thread.values(), key=lambda lst: -sum(x.get("area", 0) for x in lst))
+        specs = []
+        for lst in colours:
+            spec = {"kind": M.SHAPES_KIND, "source": src_id, "objects": [], "next_id": 1, "edited": False}
+            for sh in lst:
+                spec["objects"].append({"id": M.new_object_id(spec), "rings": sh["rings"], "thread": sh["thread"], "group": group_id})
+            specs.append(spec)
+        # the layers made from this picture before
+        existing = [i for i in M.shape_layers(doc) if (self.spec(i) or {}).get("source") == src_id]
+        if existing:
+            replace = True
+            if any(self.spec(i).get("edited") for i in existing):
                 from . import dialogs as D
                 r = D.ask_choice(win, "Replace the shapes you edited?",
                                  "This picture was converted before and its shapes have been changed since. "
-                                 "Converting again replaces them.", ["Cancel", "Add as a new layer", "Replace"], default=1)
+                                 "Converting again replaces them.", ["Cancel", "Add as new layers", "Replace"], default=1)
                 if r <= 0:
                     return
-                if r == 1:
-                    existing = None
-            if existing is not None:
-                M.store_layer(doc, existing, spec, s)
-                spec["edited"] = False
-                doc.label_last("Convert to shapes")
-                self.select(None, [])
-                self.changed("Convert to shapes")
-                self._trace_done(spec, li)
-                return
+                replace = r == 2
+            if replace:
+                for i in sorted(existing, reverse=True):
+                    doc.set_active(i)
+                    doc.layer_delete()
+                li = self.layer_index(src_id)
         doc.set_active(li)
-        M.add_shape_layer(doc, "Shapes", spec, s)
+        for spec in specs:
+            M.add_shape_layer(doc, M.thread_label(spec["objects"][0]["thread"]), spec, s)
         doc.label_last("Convert to shapes")
         self.select(None, [])
         self.changed("Convert to shapes")
-        self._trace_done(spec, li)
+        self._trace_done(specs)
 
-    def _trace_done(self, spec, picture_layer):
-        n = len(spec["objects"])
-        threads = []
-        for o in spec["objects"]:
-            if o["thread"] not in threads:
-                threads.append(o["thread"])
+    def _trace_done(self, specs):
+        n = sum(len(sp["objects"]) for sp in specs)
         self.win.state.tool = "emb"
         self.win.ribbon.refresh()
-        self.win.hint("%d shapes in %d colours. Hide the picture layer to see them on the fabric." % (n, len(threads)), 10)
+        self.win.hint("%d shapes in %d colours, one layer per colour. Hide the picture layer to see them alone." % (n, len(specs)), 10)
 
     def c_emb_delete(self):
         i, sp, objs = self.selected()
