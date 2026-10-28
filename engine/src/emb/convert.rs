@@ -82,8 +82,26 @@ pub struct Placed {
 /// scale the content to fill the hoop less `margin` mm on each side, centred, on a transparent
 /// canvas of `cw`×`ch` pixels at `s` px/mm.
 pub fn place(src: &Img, cw: usize, ch: usize, s: f32, margin: f32, crop: bool) -> Placed {
-    let bg = detect_background(src);
-    let (x0, y0, x1, y1) = if crop { content_box(src, bg).unwrap_or((0, 0, src.w, src.h)) } else { (0, 0, src.w, src.h) };
+    let mut bg = detect_background(src);
+    let (mut x0, mut y0, mut x1, mut y1) = (0, 0, src.w, src.h);
+    if bg.is_none() {
+        // a picture already placed on a transparent canvas: its own border is the one that counts
+        if let Some(b) = content_box(src, None) {
+            let mut sub = Img { w: b.2 - b.0, h: b.3 - b.1, px: Vec::new() };
+            for y in b.1..b.3 {
+                sub.px.extend_from_slice(&src.px[(y * src.w + b.0) * 4..(y * src.w + b.2) * 4]);
+            }
+            bg = detect_background(&sub);
+            if !crop {
+                (x0, y0, x1, y1) = b;
+            }
+        }
+    }
+    if crop {
+        if let Some(b) = content_box(src, bg) {
+            (x0, y0, x1, y1) = b;
+        }
+    }
     let (cw0, ch0) = (x1 - x0, y1 - y0);
     let mut cropped = Img { w: cw0, h: ch0, px: vec![0; cw0 * ch0 * 4] };
     for y in 0..ch0 {

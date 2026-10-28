@@ -121,7 +121,7 @@ def thread_label(t):
     return t.get("name") or "#%02X%02X%02X" % tuple(t["rgb"])
 
 
-def place(rgba, sw, sh, cw, ch, margin=2.5, crop=True):
+def place(rgba, sw, sh, cw, ch, margin=2.5, crop=False):
     """Fit a picture to the hoop canvas. Returns (canvas RGBA bytes, info)."""
     out = ctypes.create_string_buffer(cw * ch * 4)
     info = _take_json(L.fd_emb_place(bytes(rgba), sw, sh, cw, ch, PX_PER_MM, margin, 1 if crop else 0, out))
@@ -669,7 +669,7 @@ def safe_name(path):
 
 # ---------------------------------------------------------------- command line
 
-CLI_HELP = """usage: folio-draw --embroider PICTURE -o DESIGN.pes [--size 4x4] [--colours N] [--threads brother|exact]
+CLI_HELP = """usage: folio-draw --embroider PICTURE -o DESIGN.pes [--size 4x4] [--colours N] [--threads brother|exact] [--crop]
 
 Turns a picture (PNG, JPEG, GIF, BMP, WebP, TIFF) into an embroidery design, or exports an
 embroidery document (.ora) made in Folio Draw. The output format follows the extension:
@@ -677,6 +677,7 @@ embroidery document (.ora) made in Folio Draw. The output format follows the ext
   --size WxH    hoop in inches (4x4, 5x7, 6x10, 8x8, 8x12) or millimetres (100x100mm)
   --colours N   exactly N colours (default: automatic)
   --threads     brother (the 63-colour chart, default) or exact (the picture's colours)
+  --crop        crop away the picture's background border first (default: the whole picture fits the hoop)
 """
 
 
@@ -700,6 +701,7 @@ def cli(argv):
     size = "4x4"
     colours = 0
     chart_mode = "brother"
+    crop = False
     i = 0
     try:
         while i < len(args):
@@ -716,6 +718,9 @@ def cli(argv):
             elif a == "--threads":
                 chart_mode = args[i + 1]
                 i += 2
+            elif a == "--crop":
+                crop = True
+                i += 1
             elif a in ("-h", "--help"):
                 print(CLI_HELP)
                 return 0
@@ -741,7 +746,7 @@ def cli(argv):
         s = dict(DEFAULT_SETTINGS)
         s.update({"hoop": name, "hoop_mm": [hw, hh], "threads": chart_mode})
         cw, ch = canvas_px(s)
-        canvas, info = place(doc.flatten_rgba(), doc.width, doc.height, cw, ch)
+        canvas, info = place(doc.flatten_rgba(), doc.width, doc.height, cw, ch, crop=crop)
         ox, oy = origin(s)
         params = {"colours": colours, "upscale": info.get("upscale", 1.0), "threads": chart_mode}
         if info.get("bg"):
