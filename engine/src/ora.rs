@@ -60,8 +60,9 @@ pub fn save(doc: &Doc) -> Vec<u8> {
     let mut z = ZipWriter::new();
     z.add("mimetype", b"image/openraster", false);
     let mut xml = format!(
-        "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.5\" w=\"{}\" h=\"{}\" xres=\"72\" yres=\"72\" xmlns:folio=\"https://folio.local/ns\" folio:loop=\"{}\" folio:frames-view=\"{}\">\n <stack>\n",
-        doc.w, doc.h, doc.gif_loop, doc.solo as u8
+        "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.5\" w=\"{}\" h=\"{}\" xres=\"72\" yres=\"72\" xmlns:folio=\"https://folio.local/ns\" folio:loop=\"{}\" folio:frames-view=\"{}\"{}>\n <stack>\n",
+        doc.w, doc.h, doc.gif_loop, doc.solo as u8,
+        if doc.emb.is_empty() { String::new() } else { format!(" folio:embroidery=\"{}\"", esc(&doc.emb)) }
     );
     // stack.xml lists the topmost layer first
     let n = doc.layers.len();
@@ -176,6 +177,9 @@ pub fn load(data: &[u8]) -> Result<Doc, String> {
         doc.gif_loop = v.clamp(-1, 65535);
     }
     doc.solo = attr(img_tag, "folio:frames-view").as_deref() == Some("1");
+    if let Some(e) = attr(img_tag, "folio:embroidery") {
+        doc.emb = e;
+    }
     Ok(doc)
 }
 
@@ -195,6 +199,7 @@ mod tests {
         d.layer_add("Ink & \"quotes\"");
         d.layer_set_props(1, None, 0.5, false, BLEND_MULTIPLY, 120, false);
         d.gif_loop = 3;
+        d.emb = "{\"hoop\":\"4x4\"}".into();
         let bytes = save(&d);
         let back = load(&bytes).unwrap();
         assert_eq!(back.layers.len(), 2);
@@ -204,6 +209,7 @@ mod tests {
         assert!((back.layers[1].opacity - 0.5).abs() < 0.01);
         assert_eq!(back.layers[1].delay_ms, 120);
         assert_eq!(back.gif_loop, 3);
+        assert_eq!(back.emb, d.emb);
         assert_eq!(back.layers[0].px, d.layers[0].px);
     }
 }

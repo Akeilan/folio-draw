@@ -132,6 +132,8 @@ pub struct Doc {
     pub clip: Vec<u8>,
     pub clip_w: usize,
     pub clip_h: usize,
+    /// An embroidery document: its settings (hoop, machine, fabric...), the app's JSON; empty otherwise.
+    pub emb: String,
 }
 
 // ------------------------------------------------------------------ pixel math
@@ -540,6 +542,7 @@ impl Doc {
             clip: Vec::new(),
             clip_w: 0,
             clip_h: 0,
+            emb: String::new(),
         }
     }
 

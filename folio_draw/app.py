@@ -9,7 +9,6 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 from . import theme  # noqa: E402
-from .window import Window  # noqa: E402
 
 
 class App(Gtk.Application):
@@ -27,12 +26,18 @@ class App(Gtk.Application):
             Gtk.IconTheme.get_default().append_search_path(os.path.abspath(icons))
 
     def do_activate(self):
+        from .window import Window
         Window(self).present()
 
     def do_open(self, files, n, hint):
+        from .window import Window
         for f in files:
             Window(self, f.get_path()).present()
 
 
 def main(argv=None):
-    return App().run(argv if argv is not None else sys.argv)
+    argv = list(argv if argv is not None else sys.argv)
+    if "--embroider" in argv:
+        from .embroidery import cli
+        return cli(argv)
+    return App().run(argv)
