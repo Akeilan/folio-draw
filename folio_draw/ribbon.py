@@ -293,7 +293,9 @@ class Ribbon(Gtk.Box):
         self.home = self._home()
         self.view = self._view()
         self.text = self._text()
-        for name, title, page in (("home", "Home", self.home), ("view", "View", self.view), ("text", "Text", self.text)):
+        self.embroidery = win.emb.build_tab()
+        for name, title, page in (("home", "Home", self.home), ("view", "View", self.view), ("embroidery", "Embroidery", self.embroidery),
+                                  ("text", "Text", self.text)):
             b = Gtk.ToggleButton(label=title)
             b.get_style_context().add_class("fd-tab")
             b.set_relief(Gtk.ReliefStyle.NONE)
@@ -303,6 +305,7 @@ class Ribbon(Gtk.Box):
             self.stack.add_named(page, name)
         self.tab_buttons["text"].get_style_context().add_class("fd-context")
         self.tab_buttons["text"].set_no_show_all(True)
+        self.tab_buttons["embroidery"].set_no_show_all(True)
         self.pack_start(tabs, False, False, 0)
         holder = _box(False)
         holder.get_style_context().add_class("fd-ribbon")
@@ -352,6 +355,12 @@ class Ribbon(Gtk.Box):
         kt("text", self.opaque_radio, "O")
         kt("text", self.transp_radio, "T")
         kt("text", self.text_done_btn, "D")
+        eb = self.win.emb.buttons
+        for key, tip in (("place", "P"), ("trace", "C"), ("tool", "S"), ("nodes", "N"), ("merge", "M"), ("split", "SP"),
+                         ("recolour", "T"), ("delete", "D"), ("type", "Y"), ("stitch", "R"), ("stop", "O"), ("lettering", "L"),
+                         ("preview", "V"), ("colours", "Q"), ("hoop", "H"), ("import", "I"), ("export", "E"), ("template", "TP"),
+                         ("mirror", "MI")):
+            kt("embroidery", eb[key], tip)
 
     def _on_tab(self, btn, name):
         if self._sync:
@@ -989,6 +998,7 @@ class Ribbon(Gtk.Box):
             b.set_active(getattr(st, k))
         (self.opaque_radio if st.text_opaque else self.transp_radio).set_active(True)
         self._sync = False
+        self.win.emb.refresh_ribbon()
 
     def refresh_edit_state(self, has_sel, can_paste):
         self.cut_btn.set_sensitive(has_sel)

@@ -4,7 +4,7 @@ Esc steps back a level; a click, or Alt again, leaves. Same rules as the rest of
 
 from gi.repository import Gdk, GLib, Gtk
 
-TAB_TIPS = {"home": "H", "view": "W", "text": "JT"}
+TAB_TIPS = {"home": "H", "view": "W", "embroidery": "B", "text": "JT"}
 
 
 def press(widget):

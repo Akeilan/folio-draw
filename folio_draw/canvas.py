@@ -308,8 +308,12 @@ class Canvas(Gtk.Grid):
         cr.save()
         cr.rectangle(ox, oy, iw, ih)
         cr.clip()
-        cr.set_source(self._checker_pattern(ox, oy))
-        cr.paint()
+        emb = self.win.emb.active()
+        if emb:
+            self.win.emb.draw_under(cr, ox, oy, z)
+        else:
+            cr.set_source(self._checker_pattern(ox, oy))
+            cr.paint()
         # the picture
         cr.translate(ox, oy)
         cr.scale(z, z)
@@ -321,8 +325,10 @@ class Canvas(Gtk.Grid):
             pat.set_filter(cairo.FILTER_BILINEAR if self.interacting else cairo.FILTER_GOOD)
         cr.paint()
         cr.restore()
-        if self.st.view["grid"]:
+        if self.st.view["grid"] and not emb:
             self._draw_grid(cr, aw, ah)
+        if emb:
+            self.win.emb.draw_over(cr)
         self._draw_overlays(cr)
         return False
 
@@ -534,6 +540,8 @@ class Canvas(Gtk.Grid):
         cr.stroke()
 
     def _canvas_handles_visible(self):
+        if self.win.emb.active():
+            return False
         return (self.pending is None and self.text is None and self.doc.float_rect() is None)
 
     def _canvas_handle_points(self):
@@ -577,14 +585,21 @@ class Canvas(Gtk.Grid):
         if self.doc is None:
             return False
         z = self.z
+        length = width if horizontal else height
+        origin = self.ox if horizontal else self.oy
+        es = self.win.emb.settings()
+        if es is not None:
+            # millimetres, 0 at the hoop centre
+            hw, hh = es.get("hoop_mm", (100, 100))
+            from . import embroidery as EMB
+            z = z * EMB.PX_PER_MM
+            origin = origin + (hw if horizontal else hh) / 2.0 * z
         major = 1
         for s in (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000):
             if s * z >= 50:
                 major = s
                 break
         minor = major / 5 if major >= 5 else major / 2 if major >= 2 else major
-        length = width if horizontal else height
-        origin = self.ox if horizontal else self.oy
         start = math.floor((-origin) / z / minor) * minor
         cr.set_source_rgb(*theme.chrome("ruler_text"))
         cr.select_font_face("Sans", 0, 0)
@@ -674,6 +689,9 @@ class Canvas(Gtk.Grid):
         st = self.st
         doc = self.doc
         if self.drag:
+            return
+        if st.tool == "emb" and self.win.emb.active():
+            self.set_cursor(self.win.emb.cursor(*self.to_doc(wx, wy)))
             return
         if self._canvas_handles_visible():
             name = self._canvas_handle_hit(wx, wy)
@@ -821,6 +839,14 @@ class Canvas(Gtk.Grid):
             return True
         shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
         ctrl = bool(ev.state & Gdk.ModifierType.CONTROL_MASK)
+        emb = self.win.emb
+        if emb.active():
+            if st.tool == "emb":
+                emb.press(ev, x, y, shift, ctrl)
+                self.area.queue_draw()
+                return True
+            if st.tool not in ("zoom", "picker") and self.text is None and self.pending is None:
+                emb.ensure_paint_layer()
 
         # text box: handles first, then click outside commits
         if self.text is not None:
@@ -1089,6 +1115,11 @@ class Canvas(Gtk.Grid):
             self.hruler.queue_draw()
             self.vruler.queue_draw()
         shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
+        if self.st.tool == "emb" and self.win.emb.active():
+            self.win.emb.motion(ev, x, y)
+            if self.drag is None:
+                self._update_cursor(wx, wy)
+            return True
         d = self.drag
         if d is None:
             self._update_cursor(wx, wy)
@@ -1227,6 +1258,12 @@ class Canvas(Gtk.Grid):
 
     def _release(self, w, ev):
         doc = self.doc
+        if self.st.tool == "emb" and self.win.emb.active() and self.drag is None:
+            x, y = self.to_doc(ev.x, ev.y)
+            self.win.emb.release(ev, x, y)
+            self.interacting = False
+            self.area.queue_draw()
+            return True
         d = self.drag
         self.drag = None
         self.interacting = False
@@ -1543,6 +1580,8 @@ class Canvas(Gtk.Grid):
             try:
                 s = json.loads(raw)
             except ValueError:
+                continue
+            if not isinstance(s, dict) or "x" not in s or str(s.get("kind", "")).startswith("emb"):
                 continue
             if s["x"] <= x < s["x"] + s["w"] and s["y"] <= y < s["y"] + s["h"]:
                 return i, s

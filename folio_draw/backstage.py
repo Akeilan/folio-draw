@@ -134,7 +134,7 @@ class Backstage(Gtk.Box):
         b = Gtk.Button()
         b.set_relief(Gtk.ReliefStyle.NONE)
         b.get_style_context().add_class("fd-bs-tile")
-        b.set_name("tile-" + ("transparent" if transparent else "blank"))
+        b.set_name("tile-" + ("embroidery" if transparent == "hoop" else "transparent" if transparent else "blank"))
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         area = Gtk.DrawingArea()
         area.set_size_request(194, 120)
@@ -148,7 +148,28 @@ class Backstage(Gtk.Box):
     @staticmethod
     def _draw_tile(area, cr, transparent):
         w, h = area.get_allocated_width(), area.get_allocated_height()
-        if transparent:
+        if transparent == "hoop":
+            import math
+            cr.set_source_rgb(0.96, 0.94, 0.89)
+            cr.paint()
+            x0, y0, side = (w - h) / 2 + 14, 14, h - 28
+            r = 10
+            cr.new_sub_path()
+            cr.arc(x0 + side - r, y0 + r, r, -math.pi / 2, 0)
+            cr.arc(x0 + side - r, y0 + side - r, r, 0, math.pi / 2)
+            cr.arc(x0 + r, y0 + side - r, r, math.pi / 2, math.pi)
+            cr.arc(x0 + r, y0 + r, r, math.pi, 1.5 * math.pi)
+            cr.close_path()
+            cr.set_source_rgb(0.35, 0.33, 0.33)
+            cr.set_line_width(2.5)
+            cr.stroke()
+            cr.set_source_rgb(0.5, 0.0, 0.0)
+            cr.set_line_width(1.2)
+            for i in range(14):
+                cr.move_to(x0 + 18 + i * 4.2, y0 + 30)
+                cr.line_to(x0 + 20 + i * 4.2, y0 + side - 30)
+            cr.stroke()
+        elif transparent:
             s = 8
             for y in range(0, h, s):
                 for x in range(0, w, s):
@@ -232,6 +253,7 @@ class Backstage(Gtk.Box):
         strip = Gtk.Box(spacing=14)
         strip.pack_start(self._tile("Blank picture", False, lambda: self._run("new")), False, False, 0)
         strip.pack_start(self._tile("Transparent picture", True, lambda: self._run("new_transparent")), False, False, 0)
+        strip.pack_start(self._tile("Embroidery", "hoop", lambda: self._run("emb_new")), False, False, 0)
         box.pack_start(strip, False, False, 0)
         search, holder = self._filtered_recent(12)
         box.pack_start(search, False, False, 0)
@@ -246,6 +268,7 @@ class Backstage(Gtk.Box):
         flow = Gtk.Box(spacing=14)
         flow.pack_start(self._tile("Blank picture", False, lambda: self._run("new")), False, False, 0)
         flow.pack_start(self._tile("Transparent picture", True, lambda: self._run("new_transparent")), False, False, 0)
+        flow.pack_start(self._tile("Embroidery", "hoop", lambda: self._run("emb_new")), False, False, 0)
         box.pack_start(flow, False, False, 0)
         return box
 

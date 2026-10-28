@@ -46,7 +46,10 @@ Description: Simple drawing program with layers and real transparency
  resize and rotate — plus layers, blend modes and true alpha transparency.
  Opens and saves PNG, JPEG, BMP, GIF, WebP, TIFF, Windows icons and
  OpenRaster (.ora, keeps layers); animated GIF and WebP open with one frame per
- layer. All codecs are its own native engine. Part of the Folio suite.
+ layer. Embroidery: pictures become editable shapes with fill, satin and
+ running stitches, lettering, a stitch preview, and PES/DST export for
+ Brother (Artspira) and other machines. All codecs are its own native
+ engine. Part of the Folio suite.
 CTL
 cat > "$ROOT/DEBIAN/postinst" <<'SH'
 #!/bin/sh

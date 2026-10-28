@@ -5,6 +5,7 @@ pub mod adjust;
 pub mod bmp;
 pub mod deflate;
 pub mod doc;
+pub mod emb;
 pub mod gif;
 pub mod ico;
 pub mod jpeg;

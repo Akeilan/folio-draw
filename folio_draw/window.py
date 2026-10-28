@@ -95,6 +95,16 @@ SEARCH_COMMANDS = [
     ("Flatten image", ("flatten",), ""), ("Layer properties", ("layer_props",), "F4"),
     ("Frames view", ("frames_view",), ""), ("Play animation", ("play",), "Space"),
     ("About Folio Draw", ("about",), ""),
+    ("New embroidery", ("emb_new",), ""), ("Place picture on the hoop", ("emb_place",), "Ctrl+Shift+P"),
+    ("Convert picture to shapes", ("emb_trace",), ""), ("Select shapes", ("emb_tool",), ""),
+    ("Edit nodes", ("emb_nodes",), ""), ("Merge shapes", ("emb_merge",), ""), ("Split shape", ("emb_split",), ""),
+    ("Thread colour", ("emb_recolour",), ""), ("Delete shapes", ("emb_delete",), ""),
+    ("Stitch properties", ("emb_stitch",), ""), ("Stop after shape", ("emb_stop",), ""),
+    ("Lettering", ("emb_lettering",), ""), ("Embroidery preview", ("emb_preview",), ""),
+    ("Colour sequence", ("emb_colours",), ""), ("Hoop and machine", ("emb_hoop",), ""),
+    ("Import embroidery design", ("emb_import",), ""), ("Export embroidery (PES, DST)", ("emb_export",), "Ctrl+E"),
+    ("Print embroidery template", ("emb_template",), ""), ("Mirror design", ("emb_mirror",), ""),
+    ("Rotate shapes 90°", ("emb_rotate", 90.0), ""), ("Scale design", ("emb_scale",), ""),
 ]
 
 
@@ -102,7 +112,11 @@ SEARCH_COMMANDS = [
 CMD_LABELS = {tuple(cmd): label for label, cmd, _ in SEARCH_COMMANDS}
 CMD_LABELS.update({("delete",): "Delete", ("cut",): "Cut", ("paste",): "Paste", ("crop",): "Crop",
                    ("layer_add",): "New layer", ("adjust",): "Adjustment"})
-TOOL_LABELS = {"pencil": "Pencil", "brush": "Brush", "eraser": "Eraser", "fill": "Fill with color", "text": "Text",
+# commands an embroidery document refuses (they would turn shapes into pixels or change scale)
+from .embui import BLOCKED as EMB_BLOCKED  # noqa: E402
+from . import embroidery as EMB  # noqa: E402
+
+TOOL_LABELS = {"emb": "Shapes", "pencil": "Pencil", "brush": "Brush", "eraser": "Eraser", "fill": "Fill with color", "text": "Text",
                "shape": "Shape", "select": "Move selection", "freeselect": "Move selection",
                "polyselect": "Move selection", "wand": "Move selection"}
 
@@ -251,6 +265,8 @@ class Window(Gtk.ApplicationWindow):
         self.overlay.add(self.body)
         self.add(self.overlay)
         self.canvas = Canvas(self)
+        from .embui import EmbUI
+        self.emb = EmbUI(self)
         self.ribbon = Ribbon(self)
         self.ribbon.set_vexpand(False)
         root.pack_start(self.ribbon, False, False, 0)
@@ -261,6 +277,7 @@ class Window(Gtk.ApplicationWindow):
         self.history = HistoryPanel(self)
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         side.pack_start(self.layers, True, True, 0)
+        side.pack_start(self.emb.pane, False, False, 0)
         side.pack_start(self.history, False, False, 0)
         mid.pack_start(side, False, False, 0)
         root.pack_start(mid, True, True, 0)
@@ -481,7 +498,10 @@ class Window(Gtk.ApplicationWindow):
             self.pos_label.set_text("")
             return
         ix, iy = int(x // 1), int(y // 1)
-        if 0 <= ix < self.doc.width and 0 <= iy < self.doc.height:
+        if 0 <= ix < self.doc.width and 0 <= iy < self.doc.height and self.emb.active():
+            mx, my = EMB.px_to_mm(self.emb.settings(), x, y)
+            self.pos_label.set_text("%.1f, %.1f mm" % (mx, my))
+        elif 0 <= ix < self.doc.width and 0 <= iy < self.doc.height:
             self.pos_label.set_text("%d, %dpx" % (ix, iy))
         else:
             self.pos_label.set_text("")
@@ -493,7 +513,12 @@ class Window(Gtk.ApplicationWindow):
         doc = self.doc
         if doc is None:
             return
-        self.size_label.set_text("%d × %dpx" % (doc.width, doc.height))
+        es = self.emb.settings()
+        if es is not None:
+            hw, hh = es.get("hoop_mm", (100, 100))
+            self.size_label.set_text("Hoop %.0f × %.0f mm" % (hw, hh))
+        else:
+            self.size_label.set_text("%d × %dpx" % (doc.width, doc.height))
         fr = doc.float_rect()
         b = fr or doc.sel_bounds()
         if b and not (self.canvas.drag and self.canvas.drag.get("kind") in ("marquee", "canvas", "floatresize")):
@@ -506,6 +531,10 @@ class Window(Gtk.ApplicationWindow):
         """Called after any completed change: refresh layers, undo buttons, title."""
         self.layers.refresh_thumbs_soon()
         self.refresh_state()
+        if self.emb.active():
+            self.emb.pane.refresh_soon()
+            if self.emb.preview is not None:
+                self.emb.preview.refresh()
 
     def refresh_state(self):
         doc = self.doc
@@ -618,7 +647,11 @@ class Window(Gtk.ApplicationWindow):
         if old is not None:
             old.close()
         self.layers.rebuild()
+        self.emb.on_document()
+        if not self.emb.active() and self.state.tool == "emb":
+            self.state.tool = "pencil"
         self.refresh_state()
+        self.ribbon.refresh()
         GLib.idle_add(self._initial_zoom)
 
     def _initial_zoom(self):
@@ -652,6 +685,15 @@ class Window(Gtk.ApplicationWindow):
     def open_path(self, path, ask=True):
         if ask and not self.confirm_discard():
             return False
+        if os.path.splitext(path)[1].lower() in (".pes", ".dst", ".pec"):
+            # an embroidery design: a new embroidery document holding it as stitches
+            self.set_document(E.Document.new(16, 16, (0, 0, 0, 0)), None)
+            o = self.emb.c_emb_import(path)
+            if o is None:
+                self.new_document()
+                return False
+            self.saved_changes = self.doc.changes
+            return True
         try:
             doc = E.Document.load(path)
         except E.EngineError as e:
@@ -752,6 +794,8 @@ class Window(Gtk.ApplicationWindow):
                 f.add_pattern("*.tiff")
             dlg.add_filter(f)
             filters[e] = f
+        if ext is None and self.emb.active() and not self.path:
+            ext = ".ora"
         if ext is None:
             cur = os.path.splitext(self.path)[1].lower() if self.path else ".png"
             ext = {".jpeg": ".jpg", ".tiff": ".tif"}.get(cur, cur)
@@ -882,8 +926,11 @@ class Window(Gtk.ApplicationWindow):
         self.ribbon.refresh_recent()
 
     def cmd(self, name, *args):
-        fn = getattr(self, "c_" + name, None)
+        fn = getattr(self, "c_" + name, None) or getattr(self.emb, "c_" + name, None)
         if fn is None:
+            return
+        if name in EMB_BLOCKED and self.emb.active():
+            self.hint("%s isn't available in an embroidery document: the hoop sets the size, and shapes stay shapes." % EMB_BLOCKED[name], 8)
             return
         if name not in ("undo", "redo"):
             self._action = CMD_LABELS.get((name,) + tuple(args)) or CMD_LABELS.get((name,)) or name.replace("_", " ").capitalize()
@@ -1616,11 +1663,23 @@ class Window(Gtk.ApplicationWindow):
             if name == "z" and shift:
                 self.cmd("redo")
                 return True
+            if self.emb.active():
+                if name == "e":
+                    self.cmd("emb_export")
+                    return True
+                if name == "p" and shift:
+                    self.cmd("emb_place")
+                    return True
             ent = table.get(name)
             if ent:
                 self.cmd(*ent)
                 return True
             return False
+        if focus is cv.area or focus is None:
+            raw = Gdk.keyval_name(kv) or ""
+            if self.emb.key(raw, shift):
+                self.refresh_state()
+                return True
         if name == "space" and focus is cv.area:
             self.cmd("play")
             return True
