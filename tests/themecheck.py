@@ -96,15 +96,17 @@ def _settle(win):
 
 
 def _grab(win):
+    """The window as GTK draws it (offscreen, so other windows on top don't get in the way)."""
     import cairo
-    from gi.repository import Gdk
     _settle(win)
-    gw = win.get_window()
-    w, h = gw.get_width(), gw.get_height()
+    a = win.get_allocation()
+    w, h = max(1, a.width), max(1, a.height)
     img = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
     cr = cairo.Context(img)
-    Gdk.cairo_set_source_window(cr, gw, 0, 0)
+    cr.set_source_rgb(1, 1, 1)
     cr.paint()
+    from gi.repository import Gtk
+    Gtk.Widget.draw(win, cr)   # not win.draw: an app may use that name for its own things
     img.flush()
     return img, w, h, img.get_stride(), img.get_data()
 
