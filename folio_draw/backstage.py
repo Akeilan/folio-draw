@@ -17,7 +17,7 @@ APP_NAME = "Folio Draw"
 
 NAV = [("back", ""), ("home", "Home"), ("new", "New"), ("open", "Open"), None,
        ("info", "Info"), ("save", "Save"), ("saveas", "Save As"), ("print", "Print"),
-       ("export", "Export"), ("close", "Close"), "spacer", ("about", "About")]
+       ("share", "Send in email"), ("export", "Export"), ("close", "Close"), "spacer", ("about", "About")]
 
 SAVE_FORMATS = [(".png", "PNG picture", "Lossless, keeps transparency (flattened)"),
                 (".jpg", "JPEG picture", "Small files for photos; no transparency"),
@@ -377,6 +377,28 @@ class Backstage(Gtk.Box):
         h.pack_start(left, False, False, 0)
         h.pack_start(self.print_preview, False, False, 0)
         box.pack_start(h, False, False, 0)
+        return box
+
+    def page_share(self):
+        box = self._page("Send in email")
+        for name, fmt, title, sub in (("send-png", "png", "Send as a PNG picture", "Anyone can open it; layers are flattened"),
+                                      ("send-ora", "ora", "Send as an OpenRaster picture", "Keeps every layer, for editing in Folio Draw")):
+            b = Gtk.Button()
+            b.get_style_context().add_class("fd-bs-button")
+            b.set_name(name)
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            v.pack_start(Gtk.Label(label=title, xalign=0), False, False, 0)
+            d = Gtk.Label(label=sub, xalign=0)
+            d.get_style_context().add_class("dim-label")
+            v.pack_start(d, False, False, 0)
+            b.add(v)
+            b.set_size_request(380, -1)
+            b.set_halign(Gtk.Align.START)
+            b.connect("clicked", lambda *_, f=fmt: self._run("send_email", f))
+            box.pack_start(b, False, False, 0)
+        note = Gtk.Label(label="A new message opens in your mail app with the picture attached.", xalign=0)
+        note.get_style_context().add_class("dim-label")
+        box.pack_start(note, False, False, 6)
         return box
 
     def page_export(self):

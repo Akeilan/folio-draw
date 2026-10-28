@@ -109,6 +109,12 @@ checkbutton.fd-check check:checked, radiobutton.fd-check radio:checked { backgro
 /* ---------- KeyTips ---------- */
 .fd-keytip { background: #3a3a3a; color: #ffffff; font-weight: bold; font-size: 0.8em;
   padding: 0 4px; border-radius: 2px; border: 1px solid #222222; }
+/* popovers and menus keep Draw's colours whatever the desktop theme is */
+popover, popover.background { background-color: #ffffff; color: @fd_text; }
+popover label, popover checkbutton label { color: @fd_text; }
+menu, .menu, .context-menu { background-color: #ffffff; color: @fd_text; }
+menu menuitem, menu menuitem label { color: @fd_text; }
+menu menuitem:disabled label { color: #a0a0a0; }
 popover.fd-keytip-pop { padding: 0; background: transparent; border: none; box-shadow: none; }
 
 /* ---------- File view ---------- */
@@ -138,6 +144,47 @@ popover.fd-keytip-pop { padding: 0; background: transparent; border: none; box-s
 
 menu menuitem:hover { background: @fd_tint2; color: #1c1818; }
 menu menuitem:hover label { color: #1c1818; }
+
+/* ---------- X2-01: Draw's own colours on any desktop theme (fd-own: every Draw window; fd-dialog: dialogs) ---------- */
+.fd-own, .fd-own.background { background-color: #f3f3f3; background-image: none; color: #262626; }
+.fd-panel { background-color: #f3f3f3; }
+.fd-own list row:not(:selected) { background-color: transparent; background-image: none; color: #262626; }
+.fd-own entry, .fd-own spinbutton, .fd-own spinbutton entry, .fd-own textview, .fd-own textview text {
+  background-color: #ffffff; background-image: none; color: #262626; border-color: #c8c8c8; caret-color: #262626; }
+.fd-own spinbutton button { background-color: #ffffff; background-image: none; color: #262626; border-color: #c8c8c8; box-shadow: none; }
+.fd-own spinbutton button:hover { background-color: #e8e8e8; }
+.fd-own entry selection, .fd-own textview text selection { background-color: #ecd3d3; color: #262626; }
+.fd-own check, .fd-own radio { background-color: #ffffff; background-image: none; border: 1px solid #8a8a8a; color: #262626; }
+.fd-own check:checked, .fd-own radio:checked { background-color: #800000; border-color: #5c0000; color: #ffffff; }
+.fd-own checkbutton, .fd-own radiobutton, .fd-own checkbutton label, .fd-own radiobutton label { color: #262626; }
+.fd-own checkbutton:disabled label, .fd-own radiobutton:disabled label { color: #a0a0a0; }
+.fd-own list, .fd-own treeview.view, .fd-own iconview { background-color: #ffffff; color: #262626; }
+.fd-own treeview.view:selected, .fd-own list row:selected { background-color: #ecd3d3; color: #262626; }
+.fd-own combobox button, .fd-own combobox button label, .fd-own combobox button cellview { color: #262626; }
+.fd-own combobox button { background-color: #ffffff; background-image: none; border: 1px solid #c8c8c8; box-shadow: none; }
+.fd-own scale trough { background-color: #d6d6d6; border-color: #d6d6d6; }
+.fd-own scale slider { background-color: #ffffff; background-image: none; border: 1px solid #8a8a8a; }
+.fd-own scrollbar, .fd-own scrollbar trough { background-color: transparent; border-color: transparent; }
+.fd-own scrollbar slider { background-color: #8a8a8a; }
+.fd-own separator { background-color: #c8c8c8; }
+.fd-dialog, .fd-dialog.background, .fd-dialog .dialog-vbox, .fd-dialog notebook, .fd-dialog notebook header,
+.fd-dialog notebook stack, .fd-dialog viewport, .fd-dialog headerbar, .fd-dialog .titlebar {
+  background-color: #f8f8f8; background-image: none; color: #262626; }
+.fd-dialog headerbar, .fd-dialog .titlebar { border-color: #c8c8c8; box-shadow: none; }
+.fd-dialog label, .fd-dialog headerbar .title, .fd-dialog notebook tab label { color: #262626; }
+.fd-dialog notebook tab { background: transparent; }
+.fd-dialog notebook tab:checked { border-color: #800000; }
+.fd-dialog frame > border, .fd-dialog notebook { border-color: #c8c8c8; }
+.fd-dialog button:not(.fd-primary):not(.suggested-action):not(.flat):not(.fd-swatch) {
+  background-color: #fdfdfd; background-image: none; color: #262626; border: 1px solid #c8c8c8; box-shadow: none; text-shadow: none; }
+.fd-dialog button:not(.fd-primary):not(.suggested-action):not(.flat):not(.fd-swatch):hover { background-color: #e8e8e8; }
+.fd-dialog button.flat, .fd-dialog button.flat label { color: #262626; }
+.fd-dialog button.suggested-action, .fd-dialog button.fd-primary { background-color: #800000; background-image: none; color: #ffffff; border-color: #5c0000; }
+.fd-dialog button.suggested-action label, .fd-dialog button.fd-primary label { color: #ffffff; }
+.fd-dialog .dim-label { color: #666666; }
+.fd-dialog label:disabled, .fd-dialog button:disabled label { color: #a0a0a0; }
+tooltip, tooltip.background { background-color: #ffffff; color: #262626; border: 1px solid #c8c8c8; }
+tooltip label { color: #262626; }
 """
 
 
@@ -174,7 +221,51 @@ DARK_CSS = b"""
 .fd-bs-button { background: #2b2b2b; border-color: #555555; }
 menu menuitem:hover, menu menuitem:hover label { color: #ffffff; }
 popover, popover.background { background-color: #2b2b2b; color: #f0f0f0; }
-popover label { color: #f0f0f0; }
+popover label, popover checkbutton label { color: #f0f0f0; }
+menu, .menu, .context-menu { background-color: #2b2b2b; color: #f0f0f0; }
+menu menuitem, menu menuitem label { color: #f0f0f0; }
+menu menuitem:disabled label { color: #777777; }
+
+/* ---------- X2-01: Draw's own colours on any desktop theme (fd-own: every Draw window; fd-dialog: dialogs) ---------- */
+.fd-own, .fd-own.background { background-color: #242424; background-image: none; color: #f0f0f0; }
+.fd-panel { background-color: #242424; }
+.fd-own list row:not(:selected) { background-color: transparent; background-image: none; color: #f0f0f0; }
+.fd-own entry, .fd-own spinbutton, .fd-own spinbutton entry, .fd-own textview, .fd-own textview text {
+  background-color: #1f1f1f; background-image: none; color: #f0f0f0; border-color: #555555; caret-color: #f0f0f0; }
+.fd-own spinbutton button { background-color: #1f1f1f; background-image: none; color: #f0f0f0; border-color: #555555; box-shadow: none; }
+.fd-own spinbutton button:hover { background-color: #3d3d3d; }
+.fd-own entry selection, .fd-own textview text selection { background-color: #5a2e2e; color: #f0f0f0; }
+.fd-own check, .fd-own radio { background-color: #1f1f1f; background-image: none; border: 1px solid #8a8a8a; color: #f0f0f0; }
+.fd-own check:checked, .fd-own radio:checked { background-color: #800000; border-color: #5c0000; color: #ffffff; }
+.fd-own checkbutton, .fd-own radiobutton, .fd-own checkbutton label, .fd-own radiobutton label { color: #f0f0f0; }
+.fd-own checkbutton:disabled label, .fd-own radiobutton:disabled label { color: #777777; }
+.fd-own list, .fd-own treeview.view, .fd-own iconview { background-color: #1f1f1f; color: #f0f0f0; }
+.fd-own treeview.view:selected, .fd-own list row:selected { background-color: #5a2e2e; color: #f0f0f0; }
+.fd-own combobox button, .fd-own combobox button label, .fd-own combobox button cellview { color: #f0f0f0; }
+.fd-own combobox button { background-color: #1f1f1f; background-image: none; border: 1px solid #555555; box-shadow: none; }
+.fd-own scale trough { background-color: #444444; border-color: #444444; }
+.fd-own scale slider { background-color: #1f1f1f; background-image: none; border: 1px solid #8a8a8a; }
+.fd-own scrollbar, .fd-own scrollbar trough { background-color: transparent; border-color: transparent; }
+.fd-own scrollbar slider { background-color: #8a8a8a; }
+.fd-own separator { background-color: #555555; }
+.fd-dialog, .fd-dialog.background, .fd-dialog .dialog-vbox, .fd-dialog notebook, .fd-dialog notebook header,
+.fd-dialog notebook stack, .fd-dialog viewport, .fd-dialog headerbar, .fd-dialog .titlebar {
+  background-color: #2b2b2b; background-image: none; color: #f0f0f0; }
+.fd-dialog headerbar, .fd-dialog .titlebar { border-color: #555555; box-shadow: none; }
+.fd-dialog label, .fd-dialog headerbar .title, .fd-dialog notebook tab label { color: #f0f0f0; }
+.fd-dialog notebook tab { background: transparent; }
+.fd-dialog notebook tab:checked { border-color: #800000; }
+.fd-dialog frame > border, .fd-dialog notebook { border-color: #555555; }
+.fd-dialog button:not(.fd-primary):not(.suggested-action):not(.flat):not(.fd-swatch) {
+  background-color: #333333; background-image: none; color: #f0f0f0; border: 1px solid #555555; box-shadow: none; text-shadow: none; }
+.fd-dialog button:not(.fd-primary):not(.suggested-action):not(.flat):not(.fd-swatch):hover { background-color: #3d3d3d; }
+.fd-dialog button.flat, .fd-dialog button.flat label { color: #f0f0f0; }
+.fd-dialog button.suggested-action, .fd-dialog button.fd-primary { background-color: #800000; background-image: none; color: #ffffff; border-color: #5c0000; }
+.fd-dialog button.suggested-action label, .fd-dialog button.fd-primary label { color: #ffffff; }
+.fd-dialog .dim-label { color: #b0b0b0; }
+.fd-dialog label:disabled, .fd-dialog button:disabled label { color: #777777; }
+tooltip, tooltip.background { background-color: #1f1f1f; color: #f0f0f0; border: 1px solid #555555; }
+tooltip label { color: #f0f0f0; }
 """
 
 _dark_provider = None
@@ -193,6 +284,20 @@ def install():
     if screen is None:
         return
     Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    # X2-01: every window Draw opens wears Draw's colours, so a dark or coloured desktop theme never shows through
+    from gi.repository import GObject
+
+    def _own(w, *a):
+        try:
+            if w.get_window_type() == Gtk.WindowType.TOPLEVEL and not isinstance(w, Gtk.FileChooserDialog):
+                ctx = w.get_style_context()
+                ctx.add_class("fd-own")
+                if isinstance(w, Gtk.Dialog) or not hasattr(w, "ribbon"):
+                    ctx.add_class("fd-dialog")
+        except Exception:
+            pass
+        return True
+    GObject.add_emission_hook(Gtk.Window, "realize", _own)
     appearance.apply_initial()
     _apply(appearance.is_dark())
     appearance.on_change(_apply)

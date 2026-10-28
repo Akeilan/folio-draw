@@ -5,12 +5,14 @@ pub mod adjust;
 pub mod bmp;
 pub mod deflate;
 pub mod doc;
+pub mod cutout;
 pub mod emb;
 pub mod gif;
 pub mod ico;
 pub mod jpeg;
 pub mod ora;
 pub mod png;
+pub mod psd;
 pub mod tiff;
 pub mod vp8;
 pub mod vp8_tables;
@@ -144,6 +146,8 @@ pub unsafe extern "C" fn fd_load(path: *const c_char) -> *mut Doc {
             ico::decode(&data).map(|i| Doc::from_rgba(i.w, i.h, i.px, "Background"))
         } else if data.len() > 4 && &data[..4] == b"PK\x03\x04" {
             ora::load(&data)
+        } else if psd::is_psd(&data) {
+            psd::load(&data)
         } else {
             Err("unsupported".into())
         };
@@ -468,6 +472,29 @@ pub unsafe extern "C" fn fd_stroke_begin(p: *mut Doc, tool: u32, size: f32, hard
         }
     })
 }
+#[no_mangle]
+pub unsafe extern "C" fn fd_remove_background(p: *mut Doc) -> u32 {
+    guard(0, || d(p).map_or(0, |doc| doc.remove_background() as u32))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fd_stroke_dynamics(p: *mut Doc, size_k: f32, op_k: f32, tilt_nib: u32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.stroke_dynamics(size_k, op_k, tilt_nib != 0)
+        }
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn fd_stroke_pen(p: *mut Doc, pressure: f32, tx: f32, ty: f32) {
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.stroke_pen(pressure, tx, ty)
+        }
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn fd_stroke_to(p: *mut Doc, x: f32, y: f32) {
     guard((), || {

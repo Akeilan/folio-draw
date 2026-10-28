@@ -37,6 +37,19 @@ HANDLE_CURSORS = {"nw": "nw-resize", "n": "n-resize", "ne": "ne-resize", "e": "e
                   "se": "se-resize", "s": "s-resize", "sw": "sw-resize", "w": "w-resize"}
 
 
+def pen_axes(ev):
+    """(pressure 0..1, tilt x, tilt y) from a pointer event; (1, 0, 0) when the device has no such axes."""
+    out = [1.0, 0.0, 0.0]
+    for i, axis in enumerate((Gdk.AxisUse.PRESSURE, Gdk.AxisUse.XTILT, Gdk.AxisUse.YTILT)):
+        try:
+            ok, v = ev.get_axis(axis)
+        except (TypeError, AttributeError):
+            ok, v = False, 0.0
+        if ok and v == v:
+            out[i] = max(0.0, min(1.0, v)) if i == 0 else max(-1.0, min(1.0, v))
+    return tuple(out)
+
+
 def _norm_box(x0, y0, x1, y1):
     return min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
 
@@ -924,6 +937,11 @@ class Canvas(Gtk.Grid):
             color = self._button_colors(ev.button)[0]
             self.win.note_color(color)
             doc.stroke_begin(code, float(self.win.current_size()), hard, color)
+            pk = self.win.pen_key()
+            pen = self.st.pen.get(pk) if pk else None
+            if pen:
+                doc.stroke_dynamics(pen[0] / 100.0, pen[1] / 100.0, bool(pen[2]))
+            self._feed_pen(ev)
             px, py = (math.floor(x) + 0.5, math.floor(y) + 0.5) if tool == "pencil" else (x, y)
             doc.stroke_to(px, py)
             stab = Stabilizer(*st.stabilizer[tool], zoom=self.z)
@@ -1071,6 +1089,12 @@ class Canvas(Gtk.Grid):
         self.sync()
         return ok
 
+    def _feed_pen(self, ev):
+        """Pass a graphics tablet pen's pressure and tilt to the stroke. A mouse reports neither: full pressure."""
+        p = pen_axes(ev)
+        self.doc.stroke_pen(*p)
+        self.last_pen = p
+
     def _stroke_to(self, d, pts):
         drew = False
         for p in pts:
@@ -1137,6 +1161,7 @@ class Canvas(Gtk.Grid):
             self.hadj.set_value(d["h"] - (wx - d["wx"]))
             self.vadj.set_value(d["v"] - (wy - d["wy"]))
         elif k == "stroke":
+            self._feed_pen(ev)
             self._stroke_to(d, [(x, y)] if d["stab"] is None else [d["stab"].feed(x, y)])
         elif k == "shapenew":
             p = self.pending

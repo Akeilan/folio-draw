@@ -36,7 +36,7 @@ Version: ${VERSION}
 Architecture: amd64
 Maintainer: Ron Shillings <ron.shillings@gmail.com>
 Installed-Size: ${SIZE}
-Depends: python3 (>= 3.8), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, libc6 (>= 2.34), libgcc-s1
+Depends: python3 (>= 3.8), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, librsvg2-common, libc6 (>= 2.34), libgcc-s1
 Section: graphics
 Priority: optional
 Homepage: https://folio.local/draw
