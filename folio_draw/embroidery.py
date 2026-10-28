@@ -274,19 +274,27 @@ def new_object_id(spec):
 
 
 # stitch settings a shape carries (missing keys use the engine defaults)
-STITCH_DEFAULTS = {"type": "auto", "angle": None, "spacing": 0.40, "length": 3.5, "pull": 0.20,
-                   "underlay": True, "satin_spacing": 0.40, "min_width": 1.0, "run_length": 2.0, "bean": True}
+STITCH_DEFAULTS = {"type": "auto", "angle": None, "spacing": 0.35, "length": 3.5, "pull": 0.20,
+                   "underlay": True, "satin_spacing": 0.40, "min_width": 1.0, "run_length": 2.0, "bean": True, "cover": 3.0}
 
 
 def design_json(doc, settings, only_visible=True):
     """The design for the stitch planner: every visible shape layer, bottom first."""
-    layers = []
+    specs = []
     for i in range(doc.layer_count()):
         spec = layer_spec(doc, i)
         if not spec or spec.get("kind") != SHAPES_KIND:
             continue
         if only_visible and not doc.layer_props(i)["visible"]:
             continue
+        specs.append(spec)
+    return design_json_for(specs, settings)
+
+
+def design_json_for(specs, settings):
+    """The planner's design from shape-layer descriptions, bottom first."""
+    layers = []
+    for spec in specs:
         objs = []
         for o in spec.get("objects", []):
             if o.get("hidden"):
@@ -434,7 +442,66 @@ def scale_object(o, k, cx, cy):
 
 def regen_lettering(o):
     from .letters import lettering_shapes
-    o["glyphs"] = lettering_shapes(o)
+    shapes = lettering_shapes(o)
+    env = o.get("envelope")
+    if env and env.get("kind", "none") != "none":
+        shapes = [warp_rings(g, env, bounds_of(shapes)) for g in shapes]
+    o["glyphs"] = shapes
+
+
+# ---------------------------------------------------------------- envelopes
+
+ENVELOPES = [("none", "None"), ("arch_up", "Arch up"), ("arch_down", "Arch down"), ("bulge", "Bulge"), ("pinch", "Pinch"),
+             ("wave", "Wave"), ("slant", "Slant")]
+
+
+def bounds_of(shapes):
+    xs = [p[0] for g in shapes for r in g for p in r]
+    ys = [p[1] for g in shapes for r in g for p in r]
+    if not xs:
+        return (0, 0, 1, 1)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _dense(ring, step=0.4):
+    out = []
+    n = len(ring)
+    for i in range(n):
+        ax, ay = ring[i]
+        bx, by = ring[(i + 1) % n]
+        k = max(1, int(math.hypot(bx - ax, by - ay) / step))
+        for j in range(k):
+            t = j / k
+            out.append([ax + (bx - ax) * t, ay + (by - ay) * t])
+    return out
+
+
+def warp_point(x, y, env, b):
+    """Bend a point by an envelope over the box b: arch, bulge, pinch, wave or slant; amount in %."""
+    x0, y0, x1, y1 = b
+    w, h = max(1e-6, x1 - x0), max(1e-6, y1 - y0)
+    u = (x - x0) / w
+    cy = (y0 + y1) / 2
+    a = env.get("amount", 30) / 100.0
+    k = env.get("kind", "none")
+    s = math.sin(math.pi * u)
+    if k == "arch_up":
+        return x, y - a * h * s
+    if k == "arch_down":
+        return x, y + a * h * s
+    if k == "bulge":
+        return x, cy + (y - cy) * (1 + a * s)
+    if k == "pinch":
+        return x, cy + (y - cy) * max(0.2, 1 - a * s)
+    if k == "wave":
+        return x, y + 0.5 * a * h * math.sin(2 * math.pi * u)
+    if k == "slant":
+        return x + a * (cy - y), y
+    return x, y
+
+
+def warp_rings(rings, env, b):
+    return [[list(warp_point(x, y, env, b)) for x, y in _dense(r)] for r in rings]
 
 
 def thread_rgb(t):

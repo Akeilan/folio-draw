@@ -167,6 +167,35 @@ def i_fillholes(cr, ink, acc):
     cr.stroke()
 
 
+def i_envelope(cr, ink, acc):
+    cr.set_source_rgb(*acc)
+    cr.move_to(3, 15)
+    cr.curve_to(8, 5, 16, 5, 21, 15)
+    cr.line_to(21, 20)
+    cr.curve_to(16, 12, 8, 12, 3, 20)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_dash([2, 1.5])
+    cr.rectangle(3, 6, 18, 14)
+    cr.stroke()
+
+
+def i_knockdown(cr, ink, acc):
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(0.8)
+    for k in range(-3, 6):
+        cr.move_to(3 + k * 4, 21)
+        cr.line_to(3 + k * 4 + 16, 5)
+        cr.move_to(3 + k * 4, 5)
+        cr.line_to(3 + k * 4 + 16, 21)
+    cr.stroke()
+    cr.set_source_rgb(*acc)
+    cr.set_line_width(2)
+    cr.arc(12, 13, 4, 0, math.tau)
+    cr.stroke()
+
+
 def i_stitchtype(cr, ink, acc):
     cr.set_source_rgb(*acc)
     cr.set_line_width(1.1)

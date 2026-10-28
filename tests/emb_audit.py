@@ -366,6 +366,68 @@ if red:
     ui.key("Escape", False)
     check(ui.mode == "select" and ui.sel, "Esc leaves Edit Nodes, the shape stays selected")
 
+# ---- EMB-20: appliqué, knockdown, envelopes, stitch editing
+check(M.STITCH_DEFAULTS["spacing"] == 0.35, "fill rows 0.35 mm apart by default (Product Owner: 0.40 left gaps)")
+ui.new_document(dict(M.DEFAULT_SETTINGS))
+doc = win.doc
+sq = [[[-15, -15], [15, -15], [15, 15], [-15, 15]]]
+spec = {"kind": M.SHAPES_KIND, "objects": [{"id": 1, "rings": sq, "thread": M.chart_thread(5), "stitch": {"type": "applique"}}], "next_id": 2}
+sl = M.add_shape_layer(doc, "Shapes", spec, ui.settings())
+win.canvas.sync()
+bl = ui.plan().info["blocks"]
+check(len(bl) == 3 and bl[0]["stop"] and bl[1]["stop"] and not bl[2]["stop"],
+      "appliqué: placement, stop, tack-down, stop, satin cover (%s)" % [(b["thread"]["name"], b["stop"]) for b in bl])
+ui.c_emb_knockdown()
+kd = [i for i in M.shape_layers(doc) if doc.layer_name(i) == "Knockdown"]
+check(kd and kd[0] < M.shape_layers(doc)[-1], "knockdown goes on a layer under the design")
+bl = ui.plan().info["blocks"]
+check(bl[0]["thread"]["pec"] == M.nearest_thread(ui.settings()["fabric"])["pec"], "knockdown first, in the thread nearest the fabric (%s)" % bl[0]["thread"]["name"])
+p0 = ui.plan()
+inside = sum(1 for x, y, c, b in p0.cmds() if b == 0 and c == M.ST and abs(x) < 12 and abs(y) < 12)
+check(inside > 30, "the knockdown is not cut away under the appliqué (%d stitches inside)" % inside)
+# envelope on lettering and on a shape
+o = ui.c_emb_lettering({"text": "WAVE", "font": "Sans Bold", "cap": 8.0, "arc": "none", "thread": M.chart_thread(20), "type": "auto",
+                        "spacing": 0.0, "x": 0.0, "y": 30.0})
+li_l = doc.layer_count() - 1
+flat_ys = [sum(p[1] for p in g[0]) / len(g[0]) for g in o["glyphs"]]
+ui.select(li_l, [o["id"]])
+ui.c_emb_envelope({"kind": "arch_up", "amount": 40})
+o2 = [x for x in ui.spec(li_l)["objects"] if x["id"] == o["id"]][0]
+ys = [sum(p[1] for p in g[0]) / len(g[0]) for g in o2["glyphs"]]
+check(o2.get("envelope", {}).get("kind") == "arch_up" and min(ys) < min(flat_ys) - 1.0 and ys[0] > min(ys),
+      "envelope arches the lettering (middle letters %.1f mm higher)" % (min(flat_ys) - min(ys)))
+ui.c_emb_lettering_edit({"text": "WAVES", "font": "Sans Bold", "cap": 8.0, "arc": "none", "thread": M.chart_thread(20), "type": "auto",
+                         "spacing": 0.0})
+o3 = [x for x in ui.spec(li_l)["objects"] if x["id"] == o["id"]][0]
+check(len(o3["glyphs"]) >= 5 and o3.get("envelope"), "the envelope stays when the text is edited")
+# convert to stitches, then edit single needle points
+ui.select(sl, [1])
+ui.c_emb_stitch({"type": "fill"})
+ui.select(sl, [1])
+ui.c_emb_to_stitches()
+so = ui.selected()[2][0]
+check(so["kind"] == "stitches" and sum(len(b["pts"]) for b in so["blocks"]) > 100, "shape converted to stitches")
+ui.c_emb_nodes()
+check(ui.mode == "nodes", "Edit Nodes on a stitch design")
+b0 = so["blocks"][0]
+k = next(j for j, p in enumerate(b0["pts"]) if p[2] == M.ST and j > 5)
+x, y = b0["pts"][k][0], b0["pts"][k][1]
+px, py = M.mm_to_px(ui.settings(), x, y)
+ui.press(_Ev(*win.canvas.to_screen(px, py)), px, py, False, False)
+check(ui.drag and ui.drag["kind"] == "stitchpt", "a needle point picked up")
+tx, ty = M.mm_to_px(ui.settings(), x + 0.8, y)
+ui.motion(_Ev(*win.canvas.to_screen(tx, ty)), tx, ty)
+ui.release(_Ev(*win.canvas.to_screen(tx, ty)), tx, ty)
+so = ui.selected()[2][0]
+moved = so["blocks"][0]["pts"][ui.sel_node[2]]
+check(abs(moved[0] - (x + 0.8)) < 0.05, "the needle point moved and was kept")
+n_before = len(so["blocks"][0]["pts"])
+ui.key("Delete", False)
+check(len(ui.selected()[2][0]["blocks"][0]["pts"]) == n_before - 1, "Delete takes the needle point out")
+win.c_undo()
+check(len(ui.selected()[2][0]["blocks"][0]["pts"]) == n_before, "undo puts it back")
+ui.key("Escape", False)
+
 # ---- dialogs open and close cleanly (screenshots of each)
 _real_run = Gtk.Dialog.run
 seen = []

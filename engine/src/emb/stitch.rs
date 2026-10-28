@@ -15,6 +15,10 @@ pub enum Kind {
     Fill,
     Satin,
     Run,
+    /// placement line, stop, tack-down, stop, satin cover over the edge
+    Applique,
+    /// a light net sewn first to flatten pile (towels, fleece) so the design sits on top
+    Knockdown,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +34,8 @@ pub struct Settings {
     pub min_width: f32,
     pub run_length: f32,
     pub bean: bool,
+    /// appliqué: width of the satin cover over the fabric's edge
+    pub cover: f32,
 }
 
 impl Default for Settings {
@@ -37,7 +43,7 @@ impl Default for Settings {
         Settings {
             kind: Kind::Auto,
             angle: None,
-            spacing: 0.40,
+            spacing: 0.35,
             length: 3.5,
             stagger: 1.0 / 3.0,
             pull: 0.20,
@@ -46,6 +52,7 @@ impl Default for Settings {
             min_width: 1.0,
             run_length: 2.0,
             bean: true,
+            cover: 3.0,
         }
     }
 }
@@ -57,6 +64,8 @@ impl Settings {
             "fill" => Kind::Fill,
             "satin" => Kind::Satin,
             "run" => Kind::Run,
+            "applique" => Kind::Applique,
+            "knockdown" => Kind::Knockdown,
             _ => Kind::Auto,
         };
         let a = j.get("angle");
@@ -72,6 +81,7 @@ impl Settings {
             min_width: j.get("min_width").f32(d.min_width).clamp(0.3, 3.0),
             run_length: j.get("run_length").f32(d.run_length).clamp(1.0, 7.0),
             bean: j.get("bean").b(d.bean),
+            cover: j.get("cover").f32(d.cover).clamp(1.0, 8.0),
         }
     }
 }
@@ -696,7 +706,81 @@ pub fn run_stages(rings: &[Ring], m: &Mask, st: &Settings, centre: bool) -> Stag
 }
 
 /// Everything one shape needs: (resolved kind, stages).
+/// Knockdown: two light passes of long stitches crossing at right angles, 1.5 mm apart.
+pub fn knockdown_stages(rings: &[Ring], angle: f32) -> Stages {
+    let mut out = Vec::new();
+    for a in [angle, angle + 90.0] {
+        let o = FillOpts { angle: a, spacing: 1.5, length: 4.0, stagger: 0.5, extend: 0.0, min: 0.3, top: false };
+        let r = fill_runs(rings, &o);
+        if !r.is_empty() {
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Appliqué in three parts, a stop between each: where the fabric goes (a running line on the
+/// outline), the tack-down that holds it (a running line just inside), and the satin cover
+/// over the trimmed edge.
+pub fn applique_parts(rings: &[Ring], st: &Settings, angle: f32) -> Vec<Stages> {
+    let mut place = Vec::new();
+    let mut tack = Vec::new();
+    for (i, r) in rings.iter().enumerate() {
+        if r.len() < 3 {
+            continue;
+        }
+        let mut p = resample(&ring_closed(r), 2.5);
+        p.pop();
+        if p.len() >= 3 {
+            place.push(Run { pts: p, alt: None, closed: true, top: false });
+        }
+        let inset = offset_ring(r, if i == 0 { -0.6 } else { 0.6 });
+        if signed_area(&inset).abs() > 0.5 && signed_area(&inset).signum() == signed_area(r).signum() {
+            let mut t = resample(&ring_closed(&inset), 2.0);
+            t.pop();
+            if t.len() >= 3 {
+                tack.push(Run { pts: t, alt: None, closed: true, top: false });
+            }
+        }
+    }
+    // the cover: a band along the outline, cover wide, as satin
+    let m = shape_mask(rings, st.cover + 1.0);
+    let band = m.offset(st.cover * 0.5).minus(&m.offset(-st.cover * 0.5));
+    let mut cover: Stages = Vec::new();
+    let mut cst = st.clone();
+    cst.kind = Kind::Satin;
+    cst.underlay = true;
+    for b in trace_mask(&band, 0.05) {
+        let (_, s) = shape_stages(&b, &cst, angle);
+        for (k, stage) in s.into_iter().enumerate() {
+            if cover.len() <= k {
+                cover.push(Vec::new());
+            }
+            cover[k].extend(stage);
+        }
+    }
+    let mut parts = Vec::new();
+    if !place.is_empty() {
+        parts.push(vec![place]);
+    }
+    if !tack.is_empty() {
+        parts.push(vec![tack]);
+    }
+    if !cover.is_empty() {
+        parts.push(cover);
+    }
+    parts
+}
+
 pub fn shape_stages(rings: &[Ring], st: &Settings, angle: f32) -> (Kind, Stages) {
+    if st.kind == Kind::Knockdown {
+        return (Kind::Knockdown, knockdown_stages(rings, angle));
+    }
+    if st.kind == Kind::Applique {
+        // the parts are sewn with stops between them by the sequencer; alone, all in a row
+        let parts = applique_parts(rings, st, angle);
+        return (Kind::Applique, parts.into_iter().flatten().collect());
+    }
     let m = shape_mask(rings, 0.5);
     let width = inscribed_width(&m);
     let mut kind = if st.kind == Kind::Auto { auto_kind(width) } else { st.kind };

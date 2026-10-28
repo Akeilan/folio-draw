@@ -181,7 +181,8 @@ def trace_settings(parent, last=None, bg=None):
 
 # --------------------------------------------------------------------------- stitch properties
 
-TYPES = [("auto", "Automatic (by width)"), ("fill", "Fill (tatami)"), ("satin", "Satin"), ("run", "Running stitch")]
+TYPES = [("auto", "Automatic (by width)"), ("fill", "Fill (tatami)"), ("satin", "Satin"), ("run", "Running stitch"),
+         ("applique", "Appliqué (placement, tack-down, satin cover)"), ("knockdown", "Knockdown (light net under the design)")]
 
 
 def stitch_properties(parent, objs):
@@ -206,7 +207,7 @@ def stitch_properties(parent, objs):
     rows = [("angle", "Fill angle", 0, 359, 0, "°"), ("spacing", "Row spacing", 0.2, 2.0, 2, "mm"),
             ("length", "Stitch length", 1.0, 7.0, 1, "mm"), ("satin_spacing", "Satin spacing", 0.2, 1.5, 2, "mm"),
             ("pull", "Pull compensation", 0.0, 1.0, 2, "mm"), ("min_width", "Narrowest satin", 0.4, 3.0, 1, "mm"),
-            ("run_length", "Running stitch length", 1.0, 5.0, 1, "mm")]
+            ("run_length", "Running stitch length", 1.0, 5.0, 1, "mm"), ("cover", "Appliqué cover width", 1.0, 8.0, 1, "mm")]
     spins = {}
     for i, (key, lab, lo, hi, dig, unit) in enumerate(rows, start=1):
         g.attach(_label(lab), 0, i, 1, 1)
@@ -421,5 +422,30 @@ def scale_percent(parent, current=100.0):
     r = d.run()
     _commit_spins(s)
     out = s.get_value() if r == Gtk.ResponseType.OK else None
+    d.destroy()
+    return out
+
+
+def envelope(parent, current=None):
+    """An envelope to bend shapes or lettering: kind and amount (%). Returns a dict or None."""
+    cur = {"kind": "arch_up", "amount": 30}
+    cur.update(current or {})
+    d, area = _dialog(parent, "Envelope")
+    g = _grid()
+    g.attach(_label("Shape"), 0, 0, 1, 1)
+    kind = Gtk.ComboBoxText()
+    for k, lab in M.ENVELOPES:
+        kind.append(k, lab)
+    kind.set_active_id(cur["kind"])
+    g.attach(kind, 1, 0, 2, 1)
+    g.attach(_label("Amount"), 0, 1, 1, 1)
+    amt = _spin(0, 100, cur["amount"], 0, 5)
+    g.attach(amt, 1, 1, 1, 1)
+    g.attach(_label("%"), 2, 1, 1, 1)
+    area.pack_start(_frame("Envelope", g), False, False, 0)
+    d.show_all()
+    r = d.run()
+    _commit_spins(amt)
+    out = {"kind": kind.get_active_id(), "amount": amt.get_value()} if r == Gtk.ResponseType.OK else None
     d.destroy()
     return out
