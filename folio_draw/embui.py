@@ -621,6 +621,10 @@ class EmbUI:
         row.pack_start(sep(), False, False, 0)
         lt = _box(False, 2)
         lt.pack_start(big("lettering", "lettering", "Lettering", "Add lettering from your installed fonts, straight or on an arc", "emb_lettering"), False, False, 0)
+        col = _box(True, 0)
+        col.pack_start(small("reset", "lettering", "Re-set as Lettering", "Replace the selected traced letters with real lettering from a font, "
+                             "at their size and on their line or arc. Traced letters from a small picture stitch as blobs.", "emb_reset_lettering"), False, False, 0)
+        lt.pack_start(col, False, False, 0)
         row.pack_start(group("Text", lt), False, False, 2)
         row.pack_start(sep(), False, False, 0)
         ds = _box(False, 2)
@@ -652,6 +656,7 @@ class EmbUI:
         for k in ("stitch", "type"):
             self.buttons[k].set_sensitive(bool(shapes))
         self.buttons["nodes"].set_sensitive(len(objs) == 1 and bool(objs[0].get("rings")))
+        self.buttons["reset"].set_sensitive(bool([o for o in objs if o.get("rings")]))
         self.buttons["fillholes"].set_sensitive(any(len(o.get("rings", [])) > 1 for o in objs))
         self.buttons["merge"].set_sensitive(len([o for o in objs if o.get("rings")]) >= 2)
         self.buttons["split"].set_sensitive(len(objs) == 1 and bool(objs[0].get("rings")))
@@ -1094,6 +1099,91 @@ class EmbUI:
         self.store(top, sp, "Lettering")
         self.select(top, [o["id"]])
         self.changed("Lettering")
+        return o
+
+    def lettering_geometry(self, objs):
+        """Where traced letters sit: (kind, centre x, centre y, radius of the letters' middle,
+        cap height, span) — kind 'top' / 'bottom' for an arc, 'none' for a straight line."""
+        pieces = []
+        for o in objs:
+            pts = [p for g in M.object_shapes(o) for r in g[:1] for p in r]
+            if len(pts) < 3:
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            pieces.append(((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, pts))
+        if not pieces:
+            return None
+        cx_all = [c[0] for c in pieces]
+        cy_all = [c[1] for c in pieces]
+        xs = [p[0] for c in pieces for p in c[2]]
+        ys = [p[1] for c in pieces for p in c[2]]
+        fit = letters.fit_circle([(c[0], c[1]) for c in pieces]) if len(pieces) >= 4 else None
+        if fit:
+            fx, fy, fr, rms = fit
+            angs = [math.atan2(c[0] - fx, -(c[1] - fy)) for c in pieces]
+            spread = max(angs) - min(angs)
+            if rms < 0.08 * fr and fr < 150 and spread > math.radians(25):
+                # radial extent of each piece: the cap height
+                ext = []
+                for c in pieces:
+                    rs = [math.hypot(p[0] - fx, p[1] - fy) for p in c[2]]
+                    ext.append(max(rs) - min(rs))
+                ext.sort()
+                cap = ext[len(ext) // 2] if len(ext) < 4 else ext[int(len(ext) * 0.7)]
+                top = sum(1 for c in pieces if c[1] < fy) >= len(pieces) / 2
+                return ("top" if top else "bottom", fx, fy, fr, cap, spread * fr)
+        hs = sorted(max(p[1] for p in c[2]) - min(p[1] for p in c[2]) for c in pieces)
+        cap = hs[int(len(hs) * 0.7)] if len(hs) >= 4 else hs[-1]
+        return ("none", (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, 0.0, cap, max(xs) - min(xs))
+
+    def c_emb_reset_lettering(self, values=None):
+        """Traced letters are blobs at low resolution: put real lettering from a font in their
+        place, at their size and on their line or arc, and delete them."""
+        i, sp, objs = self.selected()
+        objs = [o for o in objs if o.get("rings")]
+        if not objs:
+            self.win.hint("Box-select the traced letters first.", 6)
+            return
+        geo = self.lettering_geometry(objs)
+        if geo is None:
+            return
+        kind, gx, gy, gr, cap, span = geo
+        cap = max(2.0, round(cap * 2) / 2.0)
+        thread = objs[0].get("thread") or M.chart_thread(20)
+        if values is None:
+            init = {"text": "", "cap": cap, "arc": kind, "radius": round(max(5.0, gr - cap / 2.0), 1), "thread": thread,
+                    "type": "auto", "spacing": 0.0}
+            values = ED.lettering(self.win, init)
+            if not values:
+                return
+        values = dict(values)
+        if values.get("arc", "none") != "none" and kind == values.get("arc"):
+            values.setdefault("x", gx)
+            values.setdefault("y", gy)
+        else:
+            values.setdefault("x", gx)
+            values.setdefault("y", gy)
+        # letter spacing so the new text spans what the traced letters spanned
+        probe = dict(values, spacing=0.0)
+        shapes = letters.lettering_shapes(probe)
+        n = len(values.get("text", "").replace(" ", "")) + values.get("text", "").count(" ")
+        if shapes and n > 1 and values.get("spacing", 0.0) == 0.0:
+            if values.get("arc", "none") == "none":
+                xs = [p[0] for g in shapes for r in g for p in r]
+                cur = max(xs) - min(xs)
+            else:
+                cx, cy = values["x"], values["y"]
+                angs = [math.atan2(p[0] - cx, -(p[1] - cy) if values["arc"] == "top" else (p[1] - cy)) for g in shapes for r in g[:1] for p in r]
+                cur = (max(angs) - min(angs)) * gr
+            values["spacing"] = round(max(-1.0, min(10.0, (span - cur) / (n - 1))), 2)
+        ids = {o["id"] for o in objs}
+        sp["objects"] = [o for o in sp["objects"] if o["id"] not in ids]
+        self.store(i, sp, "Re-set as lettering")
+        self.sel = []
+        o = self.c_emb_lettering(values)
+        if o is not None and values.get("cap", 10) < 4.0:
+            self.win.hint("Lettering under 4 mm can't stitch cleanly with 0.4 mm thread; 5 mm or more reads well.", 10)
         return o
 
     def c_emb_lettering_edit(self, values=None):
