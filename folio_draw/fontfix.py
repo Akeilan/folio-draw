@@ -50,23 +50,33 @@ def fix_label(lab):
         if not size:
             return
         px = size / Pango.SCALE * (96 / 72.0) if not fd.get_size_is_absolute() else size / Pango.SCALE
-        attrs = lab.get_attributes() or Pango.AttrList()
-        attrs.insert(Pango.attr_line_height_new_absolute(int(round(px)) * Pango.SCALE))
+        want = int(round(px)) * Pango.SCALE
+        if getattr(lab, "_folio_lh", None) == want:
+            return
+        lab._folio_lh = want
+        old = lab.get_attributes()
+        attrs = Pango.AttrList()
+        if old is not None:
+            for a in old.get_attributes():
+                if a.klass.type != Pango.AttrType.ABSOLUTE_LINE_HEIGHT:
+                    attrs.insert(a.copy())
+        attrs.insert(Pango.attr_line_height_new_absolute(want))
         lab.set_attributes(attrs)
     except Exception:
         pass
 
 
 def install():
-    """Hook every label the app shows (only when the tall Carlito is in use)."""
+    """Hook every label the app makes (only when the tall Carlito is in use)."""
     if not needed():
         return False
     from gi.repository import GObject, Gtk
 
     def hook(w, *a):
-        if isinstance(w, Gtk.Label) and not getattr(w, "_folio_lh", False):
-            w._folio_lh = True
+        if isinstance(w, Gtk.Label):
             fix_label(w)
         return True
-    GObject.add_emission_hook(Gtk.Label, "realize", hook)
+    # style-updated comes when a label joins a window and whenever its font changes, before it
+    # is measured (labels on ribbon tabs not shown yet are measured too, but never realized)
+    GObject.add_emission_hook(Gtk.Label, "style-updated", hook)
     return True

@@ -300,6 +300,7 @@ labels(rb)
 hs = sorted(l.get_allocated_height() for l in labs)
 check("ribbon labels are one line of 9 pt text tall", bool(hs) and hs[len(hs) // 2] <= 17,  # 16 on 22.04; 24.04's tall Carlito made it 20
       (hs[len(hs) // 2] if hs else None, "tall Carlito: %s" % fontfix.needed()))
+check("the ribbon keeps its height (130 px on 22.04)", rb.get_allocated_height() <= 131, rb.get_allocated_height())
 
 # ---------------------------------------------------------------- M-12 File > Send in email
 import time  # noqa: E402
