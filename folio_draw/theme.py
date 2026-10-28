@@ -298,6 +298,9 @@ def install():
             pass
         return True
     GObject.add_emission_hook(Gtk.Window, "realize", _own)
+    # X2-04: the same text height on Ubuntu 24.04, whose Carlito has taller line metrics
+    from . import fontfix
+    fontfix.install()
     appearance.apply_initial()
     _apply(appearance.is_dark())
     appearance.on_change(_apply)
