@@ -267,6 +267,47 @@ outp = os.path.join(OUT, "cli.pes")
 r = cli(["folio-draw", "--embroider", os.path.join(DATA, "logo.png"), "-o", outp, "--size", "4x4"])
 check(r == 0 and os.path.exists(outp), "command-line conversion")
 
+# ---- a shape within a shape: fill the hole (red field with a white disc)
+import cairo  # noqa: E402
+surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 360, 216)
+cr = cairo.Context(surf)
+cr.set_source_rgb(0.93, 0.1, 0.12)
+cr.paint()
+cr.set_source_rgb(1, 1, 1)
+cr.arc(180, 108, 70, 0, 6.2832)
+cr.fill()
+surf.flush()
+bgra = bytes(surf.get_data())
+rgba = bytearray(len(bgra))
+rgba[0::4], rgba[1::4], rgba[2::4], rgba[3::4] = bgra[2::4], bgra[1::4], bgra[0::4], bgra[3::4]
+ui.new_document(dict(M.DEFAULT_SETTINGS))
+ui.place_rgba(bytes(rgba), 360, 216, "flag.png")
+ui.c_emb_trace({"colours": 0, "background": "keep", "crop": False, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})
+doc = win.doc
+red = [i for i in M.shape_layers(doc) if ui.spec(i)["objects"][0]["thread"]["name"] == "Red"]
+check(red and len(ui.spec(red[0])["objects"][0]["rings"]) == 2, "the red field comes out as a shape with a hole")
+
+
+class _Ev:
+    def __init__(self, x, y):
+        self.type, self.button, self.x, self.y = Gdk.EventType.BUTTON_PRESS, 1, x, y
+
+
+if red:
+    o = ui.spec(red[0])["objects"][0]
+    ui.select(red[0], [o["id"]])
+    cx, cy = M.mm_to_px(ui.settings(), 0.0, 0.0)
+    ui.press(_Ev(*win.canvas.to_screen(cx, cy)), cx, cy, False, False)
+    check(ui.sel_hole == 1, "clicking inside the selected shape's hole picks the hole")
+    snap(win, "emb_hole")
+    check(ui.key("Delete", False), "Delete fills the hole")
+    check(len(ui.spec(red[0])["objects"][0]["rings"]) == 1, "the field is a filled rectangle now")
+    win.c_undo()
+    check(len(ui.spec(red[0])["objects"][0]["rings"]) == 2, "undo brings the hole back")
+    ui.select(red[0], [o["id"]])
+    ui.c_emb_fill_holes()
+    check(len(ui.spec(red[0])["objects"][0]["rings"]) == 1, "Fill Holes on a selected shape")
+
 # ---- dialogs open and close cleanly (screenshots of each)
 _real_run = Gtk.Dialog.run
 seen = []
