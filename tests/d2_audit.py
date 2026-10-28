@@ -283,6 +283,24 @@ messages.clear()
 ok = win.open_path(bad, ask=False)
 check("a damaged Photoshop file is refused with a message", not ok and messages, messages)
 
+# ---------------------------------------------------------------- X2-04 the same text height on 22.04 and 24.04
+from folio_draw import fontfix  # noqa: E402
+labs = []
+
+
+def labels(w):
+    if isinstance(w, Gtk.Label) and w.get_mapped() and w.get_text() and "\n" not in w.get_text():
+        labs.append(w)
+    if isinstance(w, Gtk.Container):
+        for c in w.get_children():
+            labels(c)
+
+
+labels(rb)
+hs = sorted(l.get_allocated_height() for l in labs)
+check("ribbon labels are one line of 9 pt text tall", bool(hs) and hs[len(hs) // 2] <= 17,  # 16 on 22.04; 24.04's tall Carlito made it 20
+      (hs[len(hs) // 2] if hs else None, "tall Carlito: %s" % fontfix.needed()))
+
 # ---------------------------------------------------------------- M-12 File > Send in email
 import time  # noqa: E402
 fake = tempfile.mkdtemp(prefix="fd-bin-")
