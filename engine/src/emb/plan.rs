@@ -634,7 +634,20 @@ pub fn plan(design: &J) -> Plan {
             135.0
         }
     };
-    for objs in layers.into_iter() {
+    // a picture's colours may sit on layers of their own: each layer's fills still grow under
+    // the same picture's colours on the layers above
+    let group_shapes: Vec<Vec<(String, Vec<Ring>)>> = layers
+        .iter()
+        .map(|objs| {
+            objs.iter()
+                .filter_map(|o| match o {
+                    Obj::Shape(sh) if !sh.group.is_empty() => Some((sh.group.clone(), sh.rings.clone())),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    for (li, objs) in layers.into_iter().enumerate() {
         // split into runs: consecutive shapes of one traced group, or single objects
         let mut i = 0;
         let objs: Vec<Obj> = objs;
@@ -654,7 +667,7 @@ pub fn plan(design: &J) -> Plan {
         }
         let _ = i;
         for grp in groups {
-            let is_traced = matches!(grp.first(), Some(Obj::Shape(s)) if !s.group.is_empty()) && grp.len() > 1;
+            let is_traced = matches!(grp.first(), Some(Obj::Shape(s)) if !s.group.is_empty());
             if !is_traced {
                 for o in grp {
                     match o {
@@ -703,6 +716,14 @@ pub fn plan(design: &J) -> Plan {
             });
             // overlap: grow each fill only where something sewn later covers it
             let mut later = hoop_mask(&ds, s);
+            let gname = shapes.first().map(|sh| sh.group.clone()).unwrap_or_default();
+            for upper in group_shapes.iter().skip(li + 1) {
+                for (g, r) in upper {
+                    if *g == gname {
+                        fill_global(&mut later, r);
+                    }
+                }
+            }
             let mut grown: Vec<Vec<Ring>> = vec![Vec::new(); shapes.len()];
             for &k in order.iter().rev() {
                 grown[k] = if kinds[k] == Kind::Fill && ds.overlap > 0.0 { grow_into(&shapes[k].rings, &later, ds.overlap) } else { shapes[k].rings.clone() };

@@ -312,3 +312,31 @@ fn debug_colours() {
         eprintln!("  dark with grad3<=6: {n3}");
     }
 }
+
+#[test]
+fn one_layer_per_colour_stitches_like_one_layer() {
+    let t = trace("logo.png", "{}");
+    let all = grouped(&t.shapes, "logo");
+    let one = plan(&design(&[all.clone()]));
+    // the same shapes, one layer per thread, biggest colour at the bottom
+    let mut by: Vec<(String, Vec<J>, f64)> = Vec::new();
+    for s in &all {
+        let k = s.get("thread").dump();
+        let a = s.get("area").f(0.0);
+        match by.iter_mut().find(|b| b.0 == k) {
+            Some(b) => {
+                b.1.push(s.clone());
+                b.2 += a;
+            }
+            None => by.push((k, vec![s.clone()], a)),
+        }
+    }
+    by.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    let layers: Vec<Vec<J>> = by.into_iter().map(|b| b.1).collect();
+    let split = plan(&design(&layers));
+    let (a, b) = (one.stitch_count() as f32, split.stitch_count() as f32);
+    assert!((a - b).abs() < 0.1 * a, "{a} vs {b}");
+    let colours = |p: &Plan| p.blocks.iter().map(|b| b.thread.name.clone()).collect::<std::collections::BTreeSet<_>>().len();
+    assert_eq!(colours(&one), colours(&split));
+    assert!(split.blocks.len() <= one.blocks.len(), "{} vs {} blocks", split.blocks.len(), one.blocks.len());
+}
