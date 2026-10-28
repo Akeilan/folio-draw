@@ -664,7 +664,7 @@ class EmbUI:
         self.place_rgba(src.flatten_rgba(), src.width, src.height, os.path.basename(path))
         src.close()
 
-    def place_rgba(self, rgba, sw, sh, name="Picture", crop=True):
+    def place_rgba(self, rgba, sw, sh, name="Picture", crop=False):
         win = self.win
         s = self.settings()
         cw, ch = M.canvas_px(s)

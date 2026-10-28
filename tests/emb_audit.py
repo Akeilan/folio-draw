@@ -79,8 +79,15 @@ check("Hoop" in win.size_label.get_text(), "status shows the hoop: " + win.size_
 
 # ---- EMB-03 place and convert the reference emblem
 li = ui.place_rgba(*(lambda d: (d.flatten_rgba(), d.width, d.height))(E.Document.load(os.path.join(DATA, "dsa.gif"))), name="dsa.gif")
+# the convert below asks for the crop: the emblem's red field goes, its artwork fills the hoop
 pump(0.2)
 spec = M.layer_spec(win.doc, li)
+px = win.doc.layer_rgba(li)
+cols = [x for x in range(win.doc.width) if any(px[(y * win.doc.width + x) * 4 + 3] for y in range(0, win.doc.height, 7))]
+rows = [y for y in range(win.doc.height) if any(px[(y * win.doc.width + x) * 4 + 3] for x in range(0, win.doc.width, 7))]
+pw, ph = (cols[-1] - cols[0] + 1) / 10.0, (rows[-1] - rows[0] + 1) / 10.0
+check(abs(pw - 96.6) < 1 and abs(ph - 96.6 * 216 / 360) < 2, "the whole picture is fitted to the hoop, not cropped (%.1f × %.1f mm)" % (pw, ph))
+snap(win, "emb_placed")
 check(spec and spec["kind"] == M.PICTURE_KIND and spec.get("bg"), "picture layer remembers its background")
 t0 = time.time()
 ui.c_emb_trace({"colours": 0, "background": "remove", "crop": True, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})

@@ -125,7 +125,7 @@ def hoop_settings(parent, settings, new=False):
 
 def trace_settings(parent, last=None, bg=None):
     """Picture-to-shapes settings: colours, background, crop, smoothing, smallest region."""
-    p = {"colours": 0, "background": "remove", "crop": True, "smoothing": 1, "min_area": 1.5, "edge_radius": 2}
+    p = {"colours": 0, "background": "remove", "crop": False, "smoothing": 1, "min_area": 1.5, "edge_radius": 2}
     p.update(last or {})
     d, area = _dialog(parent, "Convert to Shapes", ok="Convert")
     g = _grid()
@@ -146,8 +146,8 @@ def trace_settings(parent, last=None, bg=None):
     g.attach(bgmode, 1, 1, 2, 1)
     pick = _colour_button(p.get("bg") or bg or [255, 255, 255])
     g.attach(pick, 3, 1, 1, 1)
-    crop = Gtk.CheckButton(label="Crop to the artwork and fit it to the hoop")
-    crop.set_active(bool(p.get("crop", True)))
+    crop = Gtk.CheckButton(label="Crop away the picture's background border and enlarge the artwork to the hoop")
+    crop.set_active(bool(p.get("crop", False)))
     g.attach(crop, 0, 2, 4, 1)
     g.attach(_label("Smoothing"), 0, 3, 1, 1)
     smooth = _spin(0, 4, p.get("smoothing", 1))
