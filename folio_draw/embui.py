@@ -37,6 +37,7 @@ class EmbUI:
         self.win = win
         self.sel_layer = None        # layer id holding the selected objects
         self.sel_hole = None         # a hole (ring index) of the one selected shape
+        self.sel_node = None         # (ring, vertex) picked in Edit Nodes
         self.sel = []                # selected object ids
         self.mode = "select"         # select | nodes | cut
         self.drag = None
@@ -251,6 +252,8 @@ class EmbUI:
         cr.stroke()
         # selection
         i, sp, objs = self.selected()
+        if self.drag and self.drag.get("kind") == "node":
+            objs = [self.drag["obj"]]
         dx, dy = (0.0, 0.0)
         if self.drag and self.drag.get("kind") == "move":
             dx, dy = self.drag.get("dmm", (0.0, 0.0))
@@ -277,14 +280,17 @@ class EmbUI:
             cr.rectangle(math.floor(X0) + 0.5, math.floor(Y0) + 0.5, X1 - X0, Y1 - Y0)
             cr.stroke()
             if self.mode == "nodes" and o.get("rings") and len(objs) == 1:
-                for ring in o["rings"]:
-                    for x, y in ring:
+                for ri, ring in enumerate(o["rings"]):
+                    for vi, (x, y) in enumerate(ring):
                         X, Y = scr(x, y)
                         cr.rectangle(X - HANDLE_PX, Y - HANDLE_PX, 2 * HANDLE_PX, 2 * HANDLE_PX)
-                cr.set_source_rgb(1, 1, 1)
-                cr.fill_preserve()
-                cr.set_source_rgb(0.5, 0, 0)
-                cr.stroke()
+                        if self.sel_node == (ri, vi):
+                            cr.set_source_rgb(0.8, 0.1, 0.1)
+                        else:
+                            cr.set_source_rgb(1, 1, 1)
+                        cr.fill_preserve()
+                        cr.set_source_rgb(0.5, 0, 0)
+                        cr.stroke()
         if self.marquee:
             (ax, ay), (bx, by) = self.marquee
             A, B = scr(ax, ay), scr(bx, by)
@@ -330,6 +336,43 @@ class EmbUI:
             self.drag = {"kind": "cut"}
             return
         i, sp, objs = self.selected()
+        if self.mode == "nodes" and len(objs) == 1 and objs[0].get("rings"):
+            cv = self.win.canvas
+            s = self.settings()
+            o = objs[0]
+            for ri, ring in enumerate(o["rings"]):
+                for vi, (vx, vy) in enumerate(ring):
+                    X, Y = cv.to_screen(*M.mm_to_px(s, vx, vy))
+                    if abs(X - ev.x) <= HANDLE_PX + 2 and abs(Y - ev.y) <= HANDLE_PX + 2:
+                        # the drag works on this copy of the layer; release stores it
+                        self.sel_node = (ri, vi)
+                        self.drag = {"kind": "node", "ring": ri, "vertex": vi, "start": (mx, my), "layer": i, "spec": sp, "obj": o}
+                        self.win.canvas.area.queue_draw()
+                        self.win.hint("Drag the node, or Delete to remove it (its neighbours join up).", 6)
+                        return
+            if dbl:
+                # double-click on an edge: a new node there
+                best = None
+                tol = max(0.3, 6 / (cv.z * M.PX_PER_MM))
+                for ri, ring in enumerate(o["rings"]):
+                    n = len(ring)
+                    for k in range(n):
+                        ax, ay = ring[k]
+                        bx, by = ring[(k + 1) % n]
+                        vx, vy = bx - ax, by - ay
+                        l2 = vx * vx + vy * vy
+                        t = 0 if l2 < 1e-12 else max(0.0, min(1.0, ((mx - ax) * vx + (my - ay) * vy) / l2))
+                        d = math.hypot(ax + vx * t - mx, ay + vy * t - my)
+                        if d < tol and (best is None or d < best[0]):
+                            best = (d, ri, k + 1, (ax + vx * t, ay + vy * t))
+                if best:
+                    _, ri, at, p = best
+                    o["rings"][ri].insert(at, [p[0], p[1]])
+                    self.sel_node = (ri, at)
+                    self.store(i, sp, "Add node")
+                    self.changed("Add node")
+                    return
+            self.sel_node = None
         # a hole of the selected shape: clicking inside it picks the hole (Delete fills it)
         if len(objs) == 1 and len(objs[0].get("rings", [])) > 1 and ev.button == 1 and not shift:
             for ri, ring in enumerate(objs[0]["rings"][1:], start=1):
@@ -340,15 +383,6 @@ class EmbUI:
                     self.win.hint("Hole selected. Delete (or Fill Holes) fills it in.", 6)
                     return
         self.sel_hole = None
-        if self.mode == "nodes" and len(objs) == 1 and objs[0].get("rings"):
-            cv = self.win.canvas
-            s = self.settings()
-            for ri, ring in enumerate(objs[0]["rings"]):
-                for vi, (vx, vy) in enumerate(ring):
-                    X, Y = cv.to_screen(*M.mm_to_px(s, vx, vy))
-                    if abs(X - ev.x) <= HANDLE_PX + 2 and abs(Y - ev.y) <= HANDLE_PX + 2:
-                        self.drag = {"kind": "node", "ring": ri, "vertex": vi, "start": (mx, my)}
-                        return
         li, o = self.hit(mx, my)
         if o is None:
             if not shift:
@@ -360,6 +394,13 @@ class EmbUI:
         if dbl and o.get("kind") == "lettering":
             self.select(li, [o["id"]])
             self.c_emb_lettering_edit()
+            return
+        if dbl and o.get("rings"):
+            self.select(li, [o["id"]])
+            self.mode = "nodes"
+            self.win.hint("Edit Nodes: drag a node, Delete removes it, double-click an edge adds one. Esc when done.", 8)
+            self.win.canvas.area.queue_draw()
+            self.refresh_ribbon()
             return
         if shift and lid == self.sel_layer:
             ids = list(self.sel)
@@ -384,10 +425,7 @@ class EmbUI:
             self.marquee = (self.drag["start"], (mx, my))
         elif k == "node":
             self.drag["at"] = (mx, my)
-            i, sp, objs = self.selected()
-            if objs:
-                r = objs[0]["rings"][self.drag["ring"]]
-                r[self.drag["vertex"]] = [mx, my]
+            self.drag["obj"]["rings"][self.drag["ring"]][self.drag["vertex"]] = [mx, my]
         elif k == "cut":
             self.cut_line[-1] = (mx, my)
         self.win.canvas.area.queue_draw()
@@ -408,10 +446,9 @@ class EmbUI:
             if abs(bx - ax) > 0.2 or abs(by - ay) > 0.2:
                 self.box_select(min(ax, bx), min(ay, by), max(ax, bx), max(ay, by), add=d.get("add"))
         elif k == "node":
-            i, sp, objs = self.selected()
-            if i is not None and "at" in d:
-                self.store(i, sp, "Edit nodes")
-                self.changed("Edit nodes")
+            if "at" in d:
+                self.store(d["layer"], d["spec"], "Move node")
+                self.changed("Move node")
         elif k == "cut":
             line = self.cut_line
             self.cut_line = None
@@ -425,15 +462,21 @@ class EmbUI:
         if not self.active() or self.win.state.tool != "emb":
             return False
         if name in ("Delete", "BackSpace") and self.sel:
-            if self.sel_hole is not None:
+            if self.mode == "nodes" and self.sel_node is not None:
+                self.c_emb_delete_node()
+            elif self.sel_hole is not None:
                 self.c_emb_fill_holes()
             else:
                 self.c_emb_delete()
             return True
         if name == "Escape":
-            if self.mode != "select" or self.sel:
+            if self.mode != "select":
                 self.mode = "select"
                 self.cut_line = None
+                self.sel_node = None
+                self.win.canvas.area.queue_draw()
+                return True
+            if self.sel:
                 self.select(None, [])
                 return True
             return False
@@ -446,6 +489,7 @@ class EmbUI:
 
     def select(self, li, ids):
         self.sel_hole = None
+        self.sel_node = None
         if li is None or not ids:
             self.sel = []
             self.sel_layer = None
@@ -546,7 +590,7 @@ class EmbUI:
         sh = _box(False, 2)
         sh.pack_start(big("tool", "shapetool", "Select", "Select, move and box-select shapes (S)", "emb_tool"), False, False, 0)
         col = _box(True, 0)
-        col.pack_start(small("nodes", "nodes", "Edit Nodes", "Drag the corners of the selected shape", "emb_nodes"), False, False, 0)
+        col.pack_start(small("nodes", "nodes", "Edit Nodes", "Move, delete (Delete) or add (double-click an edge) the nodes of the selected shape. Double-clicking a shape does this too.", "emb_nodes"), False, False, 0)
         col.pack_start(small("merge", "union", "Merge", "Join the selected shapes into one", "emb_merge"), False, False, 0)
         col.pack_start(small("split", "split", "Split", "Split the selected shape into its separate parts, or along a line you draw", "emb_split"), False, False, 0)
         sh.pack_start(col, False, False, 0)
@@ -846,7 +890,29 @@ class EmbUI:
         self.mode = "select" if self.mode == "nodes" else "nodes"
         self.win.canvas.area.queue_draw()
         if self.mode == "nodes":
-            self.win.hint("Drag the corners of the shape. Esc when done.", 6)
+            self.win.hint("Edit Nodes: drag a node, Delete removes it, double-click an edge adds one. Esc when done.", 8)
+
+    def c_emb_delete_node(self):
+        """Remove the selected node: its two neighbours are joined by a straight edge."""
+        i, sp, objs = self.selected()
+        if len(objs) != 1 or self.sel_node is None:
+            self.win.hint("In Edit Nodes, click a node first.", 5)
+            return
+        o = objs[0]
+        ri, vi = self.sel_node
+        rings = o.get("rings", [])
+        if ri >= len(rings) or vi >= len(rings[ri]):
+            return
+        if len(rings[ri]) <= 3:
+            if ri == 0:
+                self.win.hint("A shape needs at least three nodes. Delete the shape instead.", 6)
+                return
+            del rings[ri]          # a hole down to two nodes is gone
+        else:
+            del rings[ri][vi]
+        self.sel_node = None
+        self.store(i, sp, "Delete node")
+        self.changed("Delete node")
 
     def c_emb_fill_holes(self):
         """Fill the selected hole, or every hole of the selected shapes: a ring becomes solid."""

@@ -185,7 +185,9 @@ fn is_blend(c: Lab, bg: Lab, r: Lab) -> bool {
 /// Is `c` on the straight RGB line between two real colours (an edge between them)?
 fn is_pair_blend(c: Lab, a: Lab, b: Lab) -> bool {
     let ab = de76(a, b);
-    let tol = 10f32.max(0.16 * ab);
+    // looser than the background test: a colour found this late must be well clear of every
+    // edge between colours already found
+    let tol = 12f32.max(0.25 * ab);
     let (ar, br) = (lab_to_rgb(a), lab_to_rgb(b));
     let (af, bf) = ([ar[0] as f32, ar[1] as f32, ar[2] as f32], [br[0] as f32, br[1] as f32, br[2] as f32]);
     (1..40).any(|i| de76(c, lab_lerp_rgb(af, bf, i as f32 / 40.0)) < tol)
@@ -207,6 +209,9 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
     let bg_rgb = p.bg.or_else(|| detect_background(img));
     let bg_lab = bg_rgb.map(rgb_to_lab);
     let remove_bg = p.bg_mode == 0 && bg_lab.is_some();
+    // colours are found apart from the background whether it is removed or kept: kept, it joins
+    // them afterwards as a colour of its own
+    let has_bg = bg_lab.is_some();
 
     // interior pixels only: edges found with a morphological gradient, kernel scaled to the
     // upscale factor so wide ramps of an enlarged picture don't count as colours
@@ -222,7 +227,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
         if !opaque[i] || grad[i] > 12.0 {
             continue;
         }
-        if remove_bg && de76(lab[i], bg_lab.unwrap()) < 10.0 {
+        if has_bg && de76(lab[i], bg_lab.unwrap()) < 10.0 {
             continue;
         }
         interior_count += 1;
@@ -233,7 +238,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
         if !opaque[i] || grad[i] > 12.0 {
             continue;
         }
-        if remove_bg && de76(lab[i], bg_lab.unwrap()) < 10.0 {
+        if has_bg && de76(lab[i], bg_lab.unwrap()) < 10.0 {
             continue;
         }
         if c % stride == 0 {
@@ -244,7 +249,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
     if samples.is_empty() {
         // nothing but edges (or nothing at all): fall back to every opaque non-background pixel
         for i in 0..n {
-            if opaque[i] && !(remove_bg && de76(lab[i], bg_lab.unwrap()) < 10.0) {
+            if opaque[i] && !(has_bg && de76(lab[i], bg_lab.unwrap()) < 10.0) {
                 samples.push(lab[i]);
             }
         }
@@ -263,7 +268,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
                 for s in &samples {
                     let mut d = centres.iter().map(|c| de76sq(*s, *c)).fold(f32::MAX, f32::min);
                     if let Some(b) = bg_lab {
-                        if remove_bg {
+                        if has_bg {
                             d = d.min(de76sq(*s, b));
                         }
                     }
@@ -301,7 +306,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
     };
     if p.colours == 0 {
         // drop anti-aliasing blends between the removed background and a real colour
-        if remove_bg {
+        if has_bg {
             let b = bg_lab.unwrap();
             let pv = pop(&centres);
             let mut order: Vec<usize> = (0..centres.len()).collect();
@@ -329,7 +334,7 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
         centres = merged;
         // thin artwork can be all edge, so its colour never reached the interior samples: look
         // for pixels far from every colour that are not blends of colours already found
-        let content: usize = (0..n).filter(|&i| opaque[i] && !(remove_bg && de76(lab[i], bg_lab.unwrap()) < 10.0)).count();
+        let content: usize = (0..n).filter(|&i| opaque[i] && !(has_bg && de76(lab[i], bg_lab.unwrap()) < 10.0)).count();
         for _ in 0..4 {
             if centres.len() >= p.auto_max {
                 break;
@@ -342,14 +347,17 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
             let near: Vec<f32> = (0..n)
                 .map(|i| if opaque[i] { ends.iter().map(|e| de76sq(lab[i], *e)).fold(f32::MAX, f32::min) } else { 0.0 })
                 .collect();
-            let mut cand: Vec<Lab> = Vec::new();
+            // pixels far from every colour so far; the cores of thin lines among them (as far
+            // from every known colour as their neighbours) give the new colour
+            let mut far: Vec<usize> = Vec::new();
+            let mut core: Vec<Lab> = Vec::new();
             for i in 0..n {
                 if near[i] <= 14.0 * 14.0 {
                     continue;
                 }
-                // the core of a thin line: as far from every known colour as its neighbours
+                far.push(i);
                 let (x, y) = (i % w, i / w);
-                let mut core = true;
+                let mut is_core = true;
                 'nb: for dy in -1i64..=1 {
                     for dx in -1i64..=1 {
                         let (xx, yy) = (x as i64 + dx, y as i64 + dy);
@@ -357,37 +365,40 @@ pub fn convert(img: &Img, s: f32, x0: f32, y0: f32, p: &Params) -> Converted {
                             continue;
                         }
                         if near[yy as usize * w + xx as usize] > near[i] * 1.0001 + 1.0 {
-                            core = false;
+                            is_core = false;
                             break 'nb;
                         }
                     }
                 }
-                if core {
-                    cand.push(lab[i]);
+                if is_core {
+                    core.push(lab[i]);
                 }
             }
-            if cand.len() < 30 || (cand.len() as f64) < 0.001 * content as f64 {
+            if far.len() < 30 || (far.len() as f64) < 0.001 * content as f64 {
                 break;
             }
-            // the purest of them: drop blends of any two colours found so far
-            let step = (cand.len() / 20000).max(1);
-            let cand: Vec<Lab> = cand
-                .into_iter()
-                .step_by(step)
-                .filter(|c| {
-                    for a in 0..ends.len() {
-                        for b in a + 1..ends.len() {
-                            if is_pair_blend(*c, ends[a], ends[b]) {
-                                return false;
-                            }
+            let not_blend = |c: &Lab| {
+                for a in 0..ends.len() {
+                    for b in a + 1..ends.len() {
+                        if is_pair_blend(*c, ends[a], ends[b]) {
+                            return false;
                         }
                     }
-                    true
-                })
-                .collect();
-            if cand.len() * step < 30 || ((cand.len() * step) as f64) < 0.001 * content as f64 {
+                }
+                true
+            };
+            // how much of the far part is a real colour rather than edges between known ones
+            let step = (far.len() / 20000).max(1);
+            let sample: Vec<Lab> = far.iter().step_by(step).map(|&i| lab[i]).collect();
+            let real: Vec<Lab> = sample.iter().copied().filter(|c| not_blend(c)).collect();
+            let real_count = real.len() * step;
+            let min_px = (p.min_area * s * s) as usize * 4;
+            if real_count < 30.max(min_px) || (real_count as f64) < 0.001 * content as f64 {
                 break;
             }
+            let cstep = (core.len() / 20000).max(1);
+            let core_real: Vec<Lab> = core.into_iter().step_by(cstep).filter(|c| not_blend(c)).collect();
+            let cand = if core_real.len() >= 20 { core_real } else { real };
             let c = kmeans(&cand, 1, p.seed, 20)[0];
             if centres.iter().any(|m| de2000(*m, c) < 4.0) {
                 break;
