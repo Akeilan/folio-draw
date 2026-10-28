@@ -267,6 +267,14 @@ outp = os.path.join(OUT, "cli.pes")
 r = cli(["folio-draw", "--embroider", os.path.join(DATA, "logo.png"), "-o", outp, "--size", "4x4"])
 check(r == 0 and os.path.exists(outp), "command-line conversion")
 
+# ---- the emblem with its background kept: the dark lines survive (no pink edge colour)
+ui.new_document(dict(M.DEFAULT_SETTINGS))
+li2 = ui.place_rgba(*(lambda d: (d.flatten_rgba(), d.width, d.height))(E.Document.load(os.path.join(DATA, "dsa.gif"))), name="dsa.gif")
+ui.c_emb_trace({"colours": 0, "background": "keep", "crop": False, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})
+names = sorted(win.doc.layer_name(i) for i in M.shape_layers(win.doc))
+check(len(names) == 3 and any(n.startswith("Dark Brown") for n in names) and not any("Pink" in n for n in names),
+      "background kept: red, white and the dark lines (%s)" % ", ".join(names))
+
 # ---- a shape within a shape: fill the hole (red field with a white disc)
 import cairo  # noqa: E402
 surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 360, 216)
@@ -307,6 +315,32 @@ if red:
     ui.select(red[0], [o["id"]])
     ui.c_emb_fill_holes()
     check(len(ui.spec(red[0])["objects"][0]["rings"]) == 1, "Fill Holes on a selected shape")
+
+    # ---- node editing: move a node, delete one (its neighbours join), add one
+    o = ui.spec(red[0])["objects"][0]
+    ui.select(red[0], [o["id"]])
+    ui.c_emb_nodes()
+    check(ui.mode == "nodes", "Edit Nodes")
+    ring = o["rings"][0]
+    n0 = len(ring)
+    vx, vy = ring[0]
+    px0, py0 = M.mm_to_px(ui.settings(), vx, vy)
+    sx, sy = win.canvas.to_screen(px0, py0)
+    ui.press(_Ev(sx, sy), px0, py0, False, False)
+    check(ui.drag and ui.drag["kind"] == "node", "a node picked up")
+    tx, ty = M.mm_to_px(ui.settings(), vx - 3.0, vy - 2.0)
+    ui.motion(_Ev(*win.canvas.to_screen(tx, ty)), tx, ty)
+    ui.release(_Ev(*win.canvas.to_screen(tx, ty)), tx, ty)
+    moved = ui.spec(red[0])["objects"][0]["rings"][0][0]
+    check(abs(moved[0] - (vx - 3.0)) < 0.05 and abs(moved[1] - (vy - 2.0)) < 0.05, "the node moved and was kept (%.1f, %.1f)" % tuple(moved))
+    nb = (ui.spec(red[0])["objects"][0]["rings"][0][-1], ui.spec(red[0])["objects"][0]["rings"][0][1])
+    check(ui.key("Delete", False), "Delete removes the node")
+    r2 = ui.spec(red[0])["objects"][0]["rings"][0]
+    check(len(r2) == n0 - 1 and r2[0] == nb[1] and r2[-1] == nb[0], "its neighbours are joined directly (%d -> %d nodes)" % (n0, len(r2)))
+    win.c_undo()
+    check(len(ui.spec(red[0])["objects"][0]["rings"][0]) == n0, "undo brings the node back")
+    ui.key("Escape", False)
+    check(ui.mode == "select" and ui.sel, "Esc leaves Edit Nodes, the shape stays selected")
 
 # ---- dialogs open and close cleanly (screenshots of each)
 _real_run = Gtk.Dialog.run
