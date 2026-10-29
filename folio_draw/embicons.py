@@ -380,6 +380,25 @@ def i_tostitches(cr, ink, acc):
     cr.stroke()
 
 
+def i_svgshapes(cr, ink, acc):
+    # a vector curve with its handles, dropped into the hoop as shapes
+    _hoop(cr, ink, acc)
+    cr.set_source_rgb(*acc)
+    cr.move_to(6.5, 16.5)
+    cr.curve_to(8, 7, 14, 7, 17.5, 15)
+    cr.line_to(14.5, 16.5)
+    cr.curve_to(12.5, 11.5, 10, 11.5, 9, 16.5)
+    cr.close_path()
+    cr.fill()
+    cr.set_source_rgb(*ink)
+    cr.set_line_width(1)
+    cr.move_to(6.5, 16.5)
+    cr.line_to(5, 9)
+    cr.stroke()
+    cr.rectangle(4, 7.5, 2.5, 2.5)
+    cr.fill()
+
+
 for _k, _v in list(globals().items()):
     if _k.startswith("i_") and callable(_v):
         icons.ICONS[_k[2:]] = _v

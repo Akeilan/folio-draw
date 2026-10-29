@@ -197,7 +197,7 @@ fn layer_frames(doc: &Doc) -> Vec<Vec<u8>> {
 
 /// format: 0 PNG, 1 OpenRaster, 2 BMP 24-bit (flattened on `matte`), 3 BMP 32-bit,
 /// 4 JPEG (flattened on `matte`, quality 92), 5 GIF (flattened), 6 animated GIF (layers = frames),
-/// 7 WebP (flattened, lossless), 8 animated WebP (layers = frames), 9 TIFF, 10 ICO
+/// 7 WebP (flattened, lossless), 8 animated WebP (layers = frames), 9 TIFF, 10 ICO, 11 Photoshop PSD (layers)
 #[no_mangle]
 pub unsafe extern "C" fn fd_save(p: *mut Doc, path: *const c_char, format: u32, matte: u32) -> i32 {
     let path = cstr(path);
@@ -249,6 +249,7 @@ pub unsafe extern "C" fn fd_save(p: *mut Doc, path: *const c_char, format: u32, 
             }
             9 => tiff::encode(doc.w, doc.h, &doc.flatten_rgba()),
             10 => ico::encode(doc.w, doc.h, &doc.flatten_rgba()),
+            11 => psd::save(doc),
             _ => {
                 set_error("unknown format");
                 return -1;
@@ -409,6 +410,19 @@ pub unsafe extern "C" fn fd_label_last(p: *mut Doc, label: *const c_char) {
     guard((), || {
         if let Some(doc) = d(p) {
             doc.label_last(&label)
+        }
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_undo_mark(p: *mut Doc) -> u32 {
+    guard(0, || d(p).map_or(0, |d| d.undo_mark() as u32))
+}
+#[no_mangle]
+pub unsafe extern "C" fn fd_group_since(p: *mut Doc, mark: u32, label: *const c_char) {
+    let label = cstr(label);
+    guard((), || {
+        if let Some(doc) = d(p) {
+            doc.group_since(mark as usize, &label)
         }
     })
 }

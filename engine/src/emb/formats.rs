@@ -5,11 +5,11 @@
 use super::colour::{nearest_pec_redmean, pec_name, pec_rgb};
 use super::plan::{Block, Plan, Thread, JUMP, ST, TRIM};
 
-const COLOR: u8 = 3;
-const END: u8 = 4;
+pub(crate) const COLOR: u8 = 3;
+pub(crate) const END: u8 = 4;
 
 /// The plan as a 0.1 mm command stream (y down), colour changes between blocks, END last.
-fn stream(p: &Plan) -> Vec<(i32, i32, u8)> {
+pub(crate) fn stream(p: &Plan) -> Vec<(i32, i32, u8)> {
     let mut out = Vec::new();
     for (bi, b) in p.blocks.iter().enumerate() {
         if bi > 0 {
@@ -25,7 +25,7 @@ fn stream(p: &Plan) -> Vec<(i32, i32, u8)> {
     out
 }
 
-fn bounds(s: &[(i32, i32, u8)]) -> (i32, i32, i32, i32) {
+pub(crate) fn bounds(s: &[(i32, i32, u8)]) -> (i32, i32, i32, i32) {
     if s.is_empty() {
         return (0, 0, 0, 0);
     }
@@ -859,7 +859,33 @@ pub fn read(data: &[u8]) -> Result<Plan, String> {
     if data.len() >= 512 && data.starts_with(b"LA:") {
         return read_dst(data);
     }
-    Err("not a PES, PEC or DST design".into())
+    if data.starts_with(b"%vsm%") {
+        return super::formats2::read_vp3(data);
+    }
+    let le = |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if let (Some(off), Some(flags), Some(n)) = (le(0), le(4), le(24)) {
+        if flags == 0x14 && n < 1000 && off == 0x74 + 8 * n {
+            return super::formats2::read_jef(data);
+        }
+    }
+    if data.len() > 0x100 && data[..0x17].iter().all(|b| *b == 0) && data[0xF2] == 0x20 && data[0xF3] == 0 {
+        return super::formats2::read_xxx(data);
+    }
+    Err("not a design Folio Draw reads (PES, PEC, DST, JEF, EXP, VP3 or XXX)".into())
+}
+
+/// Read a design, the file's extension deciding for formats without a signature (EXP).
+pub fn read_named(data: &[u8], ext: &str) -> Result<Plan, String> {
+    match read(data) {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            if ext.eq_ignore_ascii_case("exp") {
+                super::formats2::read_exp(data)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

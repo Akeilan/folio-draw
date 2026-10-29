@@ -138,15 +138,37 @@ class KeyTips:
         self.targets = {}
         self.win.ribbon.show_tab(name)
 
-        def place():
-            used = set()
+        def place(only=None):
+            used = set(self.targets)
+            folded = []
             for c in self.win.ribbon.page_controls.get(name, []):
                 tip = getattr(c, "keytip", None)
+                if only is not None:
+                    # the group's controls now sit in its drop-down
+                    if not _inside(c, only.body):
+                        continue
+                    g = None
+                else:
+                    g = _group_of(c)
+                if only is None and g is not None and g.collapsed:
+                    if g not in folded:
+                        folded.append(g)
+                    continue
                 if not tip or tip in used or not c.get_mapped() or not c.get_sensitive():
                     continue
                 used.add(tip)
                 self.targets[tip] = ("control", c)
                 self._badge(c, tip)
+            # a group folded into one button (narrow window): Z and its first letter open it
+            for g in folded:
+                tip = "Z" + (g.caption[:1].upper() or "G")
+                k = 1
+                while tip in used:
+                    k += 1
+                    tip = "Z" + g.caption[:1].upper() + str(k)
+                used.add(tip)
+                self.targets[tip] = ("group", (g, place))
+                self._badge(g.compact, tip)
             return False
         GLib.idle_add(place)
 
@@ -203,6 +225,33 @@ class KeyTips:
         elif kind == "button":
             self.leave()
             obj.clicked()
+        elif kind == "group":
+            g, place = obj
+            self._clear()
+            self.buffer = ""
+            self.targets = {}
+            g.open_compact()
+            GLib.timeout_add(60, lambda: place(g))
         else:
             self.leave()
             GLib.idle_add(lambda: (press(obj), False)[1])
+
+
+def _group_of(w):
+    """The ribbon group (shared ribbon) a control sits in, or None."""
+    from .suiteribbon import Group
+    p = w
+    while p is not None:
+        if isinstance(p, Group):
+            return p
+        p = p.get_parent()
+    return None
+
+
+def _inside(w, box):
+    p = w
+    while p is not None:
+        if p is box:
+            return True
+        p = p.get_parent()
+    return False

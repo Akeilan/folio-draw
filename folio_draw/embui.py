@@ -21,9 +21,10 @@ from .icons import Icon
 from .ribbon import big_button, group, make_menu, sep, small_button, _box
 
 # commands that would turn shapes into pixels or change the hoop's scale
-BLOCKED = {"resize": "Resize", "rotate_angle": "Rotate", "rot_cw": "Rotate", "rot_ccw": "Rotate", "rot_180": "Rotate",
-           "flip_h": "Flip", "flip_v": "Flip", "crop": "Crop", "canvas_resize": "Canvas size", "flatten": "Flatten",
+BLOCKED = {"crop": "Crop", "canvas_resize": "Canvas size", "flatten": "Flatten",
            "properties": "Image properties", "layer_merge": "Merge down"}
+# Image commands that act on the design instead (D3-01): the selected shapes, or everything
+TRANSFORMS = ("resize", "rotate_angle", "rot_cw", "rot_ccw", "rot_180", "flip_h", "flip_v")
 
 HANDLE_PX = 4
 
@@ -79,7 +80,7 @@ class EmbUI:
                 b.show()
             else:
                 if b.get_active():
-                    rb.tab_buttons["home"].set_active(True)
+                    rb.show_tab("home")
                 b.hide()
         if on:
             if self.win.state.view.get("colours", True):
@@ -646,6 +647,8 @@ class EmbUI:
             return b
         pic = _box(False, 2)
         pic.pack_start(big("place", "place", "Place Picture", "Place a picture on the hoop, fitted to it (Ctrl+Shift+P)", "emb_place"), False, False, 0)
+        pic.pack_start(big("svg", "svgshapes", "Shapes from Drawing",
+                           "Bring an SVG drawing in as shapes, one layer per colour, without tracing a picture", "emb_svg"), False, False, 0)
         pic.pack_start(big("trace", "trace", "Convert to Shapes",
                            "Turn the picture (or what you drew) on the active layer into editable shapes, one per colour region", "emb_trace"), False, False, 0)
         row.pack_start(group("Picture", pic), False, False, 2)
@@ -814,6 +817,60 @@ class EmbUI:
             return
         self.place_rgba(src.flatten_rgba(), src.width, src.height, os.path.basename(path))
         src.close()
+
+    def c_emb_svg(self, path=None):
+        """Embroidery > Shapes from Drawing (D3-03): an SVG's outlines as shapes in its colours."""
+        win = self.win
+        if path is None:
+            path = choose_file(win, "Shapes from Drawing", ["*.svg", "*.SVG"], "SVG drawings")
+            if not path:
+                return None
+        from . import svgshapes
+        s = self.settings()
+        hw, hh = M.hoop_mm(s)
+        try:
+            shapes = svgshapes.shapes_from_svg(path, hw, hh)
+        except Exception as e:  # a broken file: say so, don't fail
+            from . import dialogs as D
+            D.message(win, "Folio Draw can't read %s" % os.path.basename(path), str(e), Gtk.MessageType.ERROR)
+            return None
+        if not shapes:
+            win.hint("%s has no outlines to stitch (text and pictures inside it aren't read)." % os.path.basename(path), 8)
+            return None
+        exact = s.get("threads") == "exact"
+        by_thread = {}
+        for sh in shapes:
+            rgb = tuple(int(c) for c in sh["rgb"])
+            th = {"rgb": list(rgb), "name": "#%02X%02X%02X" % rgb} if exact else M.nearest_thread(rgb)
+            by_thread.setdefault(json.dumps(th, sort_keys=True), (th, []))[1].append(sh)
+        doc = win.doc
+        mark = doc.undo_mark()
+        base = os.path.splitext(os.path.basename(path))[0][:30]
+        specs = []
+        # the colour with the most area at the bottom (sewn first), as Convert to Shapes does
+        def area(lst):
+            tot = 0.0
+            for sh in lst:
+                r = sh["rings"][0]
+                tot += abs(sum(r[i][0] * r[(i + 1) % len(r)][1] - r[(i + 1) % len(r)][0] * r[i][1] for i in range(len(r)))) / 2
+            return tot
+        for th, lst in sorted(by_thread.values(), key=lambda v: -area(v[1])):
+            spec = {"kind": M.SHAPES_KIND, "objects": [], "next_id": 1, "edited": True, "source_svg": base}
+            for sh in lst:
+                o = {"id": M.new_object_id(spec), "rings": sh["rings"], "thread": th}
+                if sh["kind"] in ("run", "satin"):
+                    o["stitch"] = {"type": sh["kind"]}
+                spec["objects"].append(o)
+            M.add_shape_layer(doc, M.thread_label(th), spec, s)
+            specs.append(spec)
+        doc.group_since(mark, "Shapes from drawing")
+        self.select(None, [])
+        self.changed("Shapes from drawing")
+        n = sum(len(sp["objects"]) for sp in specs)
+        win.state.tool = "emb"
+        win.ribbon.refresh()
+        win.hint("%d shapes from %s in %d colours, one layer per colour." % (n, os.path.basename(path), len(specs)), 10)
+        return specs
 
     def place_rgba(self, rgba, sw, sh, name="Picture", crop=False):
         win = self.win
@@ -1424,7 +1481,7 @@ class EmbUI:
     def c_emb_import(self, path=None):
         win = self.win
         if path is None:
-            path = choose_file(win, "Import Design", ["*.pes", "*.PES", "*.dst", "*.DST", "*.pec", "*.PEC"], "Embroidery designs")
+            path = choose_file(win, "Import Design", M.READ_PATTERNS, "Embroidery designs")
             if not path:
                 return
         try:
@@ -1509,6 +1566,136 @@ class EmbUI:
         self.store(i, sp, "Scale")
         self.changed("Scale")
 
+    # ------------------------------------------------------------------ Image > Resize, Rotate, Flip (D3-01)
+    def transform_targets(self):
+        """(objects by layer index, picture layer indices, whole design?) the Image commands act on."""
+        doc = self.win.doc
+        i, sp, objs = self.selected()
+        if objs:
+            return {i: (sp, objs)}, [], False
+        out = {}
+        for li in M.shape_layers(doc):
+            sp = self.spec(li)
+            if sp and sp.get("objects"):
+                out[li] = (sp, list(sp["objects"]))
+        pics = [li for li in range(doc.layer_count()) if (self.spec(li) or {}).get("kind") == M.PICTURE_KIND]
+        return out, pics, True
+
+    def _targets_bounds(self, targets):
+        xs, ys = [], []
+        for sp, objs in targets.values():
+            for o in objs:
+                b = M.object_bounds(o)
+                if b != (0, 0, 0, 0):
+                    xs += [b[0], b[2]]
+                    ys += [b[1], b[3]]
+        if not xs:
+            return None
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def transform_cmd(self, name, *args):
+        """Image > Resize, Rotate and Flip in an embroidery document: the selected shapes, or the
+        whole design (shapes, lettering, imported stitches and the placed pictures) about its
+        middle. Shapes are stitched again; one undo step."""
+        win = self.win
+        targets, pics, whole = self.transform_targets()
+        b = self._targets_bounds(targets)
+        if b is None and not pics:
+            win.hint("There is nothing in the hoop to %s yet." % ("resize" if name == "resize" else "turn"), 6)
+            return False
+        if b is None:
+            hw, hh = M.hoop_mm(self.settings())
+            b = (-hw / 2, -hh / 2, hw / 2, hh / 2)
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        what = "the design" if whole else "the selected shapes"
+        if name == "rot_cw":
+            m, label = M.rotation(90, cx, cy), "Rotate right 90°"
+        elif name == "rot_ccw":
+            m, label = M.rotation(-90, cx, cy), "Rotate left 90°"
+        elif name == "rot_180":
+            m, label = M.rotation(180, cx, cy), "Rotate 180°"
+        elif name == "flip_h":
+            m, label = M.flipping(True, cx, cy), "Flip horizontal"
+        elif name == "flip_v":
+            m, label = M.flipping(False, cx, cy), "Flip vertical"
+        elif name == "rotate_angle":
+            if args:
+                deg = float(args[0])
+            else:
+                from . import dialogs as D
+                s = self.settings()
+                x0, y0 = M.mm_to_px(s, b[0], b[1])
+                x1, y1 = M.mm_to_px(s, b[2], b[3])
+                rect = (int(x0), int(y0), max(1, int(x1 - x0)), max(1, int(y1 - y0)))
+                if not hasattr(self, "_rotate_last"):
+                    self._rotate_last = {}
+                r = D.rotate_angle(win, win.canvas.surf, rect, "selection", False, self._rotate_last)
+                if not r:
+                    return False
+                deg = r[0]
+            m, label = M.rotation(deg, cx, cy), "Rotate"
+        elif name == "resize":
+            bw, bh = max(0.1, b[2] - b[0]), max(0.1, b[3] - b[1])
+            if args:
+                kx, ky = float(args[0]), float(args[1]) if len(args) > 1 else float(args[0])
+                skx, sky = (float(args[2]), float(args[3])) if len(args) > 3 else (0.0, 0.0)
+            else:
+                from . import dialogs as D
+                pw, ph = int(round(bw * M.PX_PER_MM)), int(round(bh * M.PX_PER_MM))
+                r = D.resize_skew(win, pw, ph, "selection")
+                if not r:
+                    return False
+                kx, ky = r[0] / max(1, pw), r[1] / max(1, ph)
+                skx, sky = (r[2], r[3]) if len(r) > 3 else (0.0, 0.0)
+            if abs(kx - 1) < 1e-6 and abs(ky - 1) < 1e-6 and not skx and not sky:
+                return False
+            m, label = M.scaling(kx, ky, cx, cy, skx, sky), "Resize"
+            if any(o.get("kind") == "stitches" for sp, objs in targets.values() for o in objs) and \
+                    (abs(kx - 1) > 0.10 or abs(ky - 1) > 0.10):
+                from . import dialogs as D
+                r = D.ask_choice(win, "Resize the imported stitches?",
+                                 "Imported stitches are moved, not made again: beyond 10 % they come out too dense or too sparse.",
+                                 ["Cancel", "Resize anyway"], default=0)
+                if r != 1:
+                    return False
+        else:
+            return False
+        doc = win.doc
+        mark = doc.undo_mark()
+        for li, (sp, objs) in targets.items():
+            for o in objs:
+                M.transform_object(o, m)
+            self.store(li, sp)
+        for li in pics:
+            self._transform_picture(li, m)
+        doc.group_since(mark, label)
+        self.changed(label)
+        win.hint("%s: %s, stitched again." % (label, what), 5)
+        return True
+
+    def _transform_picture(self, li, m):
+        """A placed picture follows the design (its layer keeps the hoop's size)."""
+        import cairo
+        from gi.repository import GdkPixbuf, GLib
+        doc = self.win.doc
+        s = self.settings()
+        w, h = doc.width, doc.height
+        raw = doc.layer_rgba(li)
+        pb = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(raw), GdkPixbuf.Colorspace.RGB, True, 8, w, h, w * 4)
+        out = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        cr = cairo.Context(out)
+        k = M.PX_PER_MM
+        ox, oy = M.mm_to_px(s, 0, 0)
+        a, b, c, d, e, f = m
+        # the map in pixels: px = o + k * mm
+        cr.transform(cairo.Matrix(a, b, c, d, ox + k * e - a * ox - c * oy, oy + k * f - b * ox - d * oy))
+        Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_GOOD)
+        cr.paint()
+        out.flush()
+        spec = self.spec(li)
+        doc.text_layer_set(li, M._spec_text(spec), (0, 0, w, h, bytes(out.get_data()), out.get_stride()))
+
     def c_emb_export(self, path=None, fmt=None):
         win = self.win
         if not self.active():
@@ -1523,7 +1710,7 @@ class EmbUI:
             if not path:
                 return
         if fmt is None:
-            fmt = M.FMT_DST if path.lower().endswith(".dst") else M.FMT_PEC if path.lower().endswith(".pec") else M.FMT_PES
+            fmt = M.format_for(path)
         try:
             p.write(path, fmt, M.safe_name(path))
         except M.EngineError as e:
@@ -1687,8 +1874,8 @@ def choose_export(win, name):
     d.set_do_overwrite_confirmation(True)
     d.set_current_name(name)
     filters = {}
-    for label, pat, fmt in (("PES — Brother, Artspira (*.pes)", "*.pes", M.FMT_PES), ("DST — Tajima (*.dst)", "*.dst", M.FMT_DST),
-                            ("PEC — Brother (*.pec)", "*.pec", M.FMT_PEC)):
+    for ext, (fmt, lab) in M.FORMATS.items():
+        label, pat = "%s (*%s)" % (lab, ext), "*" + ext
         f = Gtk.FileFilter()
         f.set_name(label)
         f.add_pattern(pat)
@@ -1708,13 +1895,8 @@ def choose_export(win, name):
     if r == Gtk.ResponseType.OK:
         path = d.get_filename()
         ext, fmt = filters.get(d.get_filter(), (".pes", M.FMT_PES))
-        low = path.lower()
-        if low.endswith(".dst"):
-            fmt = M.FMT_DST
-        elif low.endswith(".pec"):
-            fmt = M.FMT_PEC
-        elif low.endswith(".pes"):
-            fmt = M.FMT_PES
+        if os.path.splitext(path)[1].lower() in M.FORMATS:
+            fmt = M.format_for(path)
         else:
             path += ext
     d.destroy()

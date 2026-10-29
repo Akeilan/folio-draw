@@ -56,7 +56,18 @@ def _take_json(p):
 
 
 ST, JUMP, TRIM = 0, 1, 2
-FMT_PES, FMT_DST, FMT_PEC = 0, 1, 2
+FMT_PES, FMT_DST, FMT_PEC, FMT_JEF, FMT_EXP, FMT_VP3, FMT_XXX = 0, 1, 2, 3, 4, 5, 6
+# extension -> (format code, label) of every machine file written (D3-02)
+FORMATS = {".pes": (FMT_PES, "PES — Brother, Artspira"), ".dst": (FMT_DST, "DST — Tajima"),
+           ".jef": (FMT_JEF, "JEF — Janome"), ".exp": (FMT_EXP, "EXP — Melco, Bernina"),
+           ".vp3": (FMT_VP3, "VP3 — Husqvarna Viking, Pfaff"), ".xxx": (FMT_XXX, "XXX — Singer"),
+           ".pec": (FMT_PEC, "PEC — Brother")}
+READ_PATTERNS = [p for e in FORMATS for p in ("*" + e, "*" + e.upper())]
+
+
+def format_for(path):
+    """The format code a file name asks for (PES when the extension is none of them)."""
+    return FORMATS.get(os.path.splitext(path)[1].lower(), (FMT_PES, ""))[0]
 
 PX_PER_MM = 10.0          # embroidery canvas resolution
 MM_PER_INCH = 25.4
@@ -415,6 +426,9 @@ def move_object(o, dx, dy):
         tr["dy"] = tr.get("dy", 0.0) + dy
         o["transform"] = tr
         return
+    if o.get("kind") == "lettering" and o.get("matrix"):
+        transform_object(o, (1.0, 0.0, 0.0, 1.0, dx, dy))
+        return
     if o.get("kind") == "lettering":
         o["x"] = o.get("x", 0.0) + dx
         o["y"] = o.get("y", 0.0) + dy
@@ -428,6 +442,10 @@ def scale_object(o, k, cx, cy):
         tr = dict(o.get("transform") or {})
         tr["scale"] = tr.get("scale", 1.0) * k
         o["transform"] = tr
+        return
+    if o.get("kind") == "lettering" and o.get("matrix"):
+        o["matrix"] = list(affine_mul(scaling(k, k, cx, cy), tuple(o["matrix"])))
+        regen_lettering(o)
         return
     if o.get("kind") == "lettering":
         o["cap"] = o.get("cap", 10.0) * k
@@ -446,7 +464,93 @@ def regen_lettering(o):
     env = o.get("envelope")
     if env and env.get("kind", "none") != "none":
         shapes = [warp_rings(g, env, bounds_of(shapes)) for g in shapes]
+    m = o.get("matrix")
+    if m:
+        shapes = [affine_rings(g, m) for g in shapes]
     o["glyphs"] = shapes
+
+
+# ---------------------------------------------------------------- affine transforms (D3-01)
+# m = (a, b, c, d, e, f): x' = a x + c y + e, y' = b x + d y + f (mm, y down)
+
+IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def affine_mul(m2, m1):
+    """m2 after m1."""
+    a2, b2, c2, d2, e2, f2 = m2
+    a1, b1, c1, d1, e1, f1 = m1
+    return (a2 * a1 + c2 * b1, b2 * a1 + d2 * b1, a2 * c1 + c2 * d1, b2 * c1 + d2 * d1,
+            a2 * e1 + c2 * f1 + e2, b2 * e1 + d2 * f1 + f2)
+
+
+def affine_about(lin, cx, cy):
+    """A linear map (a, b, c, d) applied about the point (cx, cy)."""
+    a, b, c, d = lin
+    return (a, b, c, d, cx - a * cx - c * cy, cy - b * cx - d * cy)
+
+
+def rotation(deg, cx=0.0, cy=0.0):
+    """Clockwise on screen (y down) by `deg` degrees about (cx, cy)."""
+    t = math.radians(deg)
+    co, si = math.cos(t), math.sin(t)
+    return affine_about((co, si, -si, co), cx, cy)
+
+
+def scaling(kx, ky, cx=0.0, cy=0.0, skx=0.0, sky=0.0):
+    """Scale by kx, ky, then skew by skx (horizontal) and sky (vertical) degrees, about (cx, cy)."""
+    tx, ty = math.tan(math.radians(skx)), math.tan(math.radians(sky))
+    # skew after scale: [1 tx; ty 1] . [kx 0; 0 ky]
+    return affine_about((kx, ty * kx, tx * ky, ky), cx, cy)
+
+
+def flipping(horizontal, cx=0.0, cy=0.0):
+    return affine_about((-1.0, 0.0, 0.0, 1.0) if horizontal else (1.0, 0.0, 0.0, -1.0), cx, cy)
+
+
+def affine_pt(m, x, y):
+    a, b, c, d, e, f = m
+    return a * x + c * y + e, b * x + d * y + f
+
+
+def affine_rings(rings, m):
+    out = [[list(affine_pt(m, x, y)) for x, y in r] for r in rings]
+    if m[0] * m[3] - m[1] * m[2] < 0:
+        out = [r[::-1] for r in out]    # a mirror keeps outlines and holes turning the same way
+    return out
+
+
+def _turn_angle(st, m):
+    """A fixed fill angle follows the shape it belongs to."""
+    if not isinstance(st, dict) or st.get("angle") is None:
+        return st
+    t = math.radians(st["angle"])
+    vx, vy = math.cos(t), math.sin(t)
+    a, b, c, d = m[:4]
+    wx, wy = a * vx + c * vy, b * vx + d * vy
+    st = dict(st)
+    st["angle"] = round(math.degrees(math.atan2(wy, wx)) % 180.0, 2)
+    return st
+
+
+def transform_object(o, m):
+    """Apply the affine map m to an object: shapes move their outlines, lettering keeps its text
+    and remembers the map, imported stitches are moved needle point by needle point."""
+    kind = o.get("kind")
+    if kind == "stitches":
+        blocks = transformed_stitches(o)["blocks"]
+        for b in blocks:
+            b["pts"] = [[*affine_pt(m, x, y), cmd] for x, y, cmd in b["pts"]]
+        o["blocks"] = blocks
+        o["transform"] = {}
+        return
+    if "stitch" in o:
+        o["stitch"] = _turn_angle(o["stitch"], m)
+    if kind == "lettering":
+        o["matrix"] = list(affine_mul(m, tuple(o.get("matrix") or IDENTITY)))
+        o["glyphs"] = [affine_rings(g, m) for g in o.get("glyphs", [])]
+        return
+    o["rings"] = affine_rings(o.get("rings", []), m)
 
 
 # ---------------------------------------------------------------- envelopes
@@ -740,7 +844,8 @@ CLI_HELP = """usage: folio-draw --embroider PICTURE -o DESIGN.pes [--size 4x4] [
 
 Turns a picture (PNG, JPEG, GIF, BMP, WebP, TIFF) into an embroidery design, or exports an
 embroidery document (.ora) made in Folio Draw. The output format follows the extension:
-.pes (Brother, Artspira), .dst (Tajima) or .pec.
+.pes (Brother, Artspira), .dst (Tajima), .jef (Janome), .exp (Melco), .vp3 (Husqvarna
+Viking, Pfaff), .xxx (Singer) or .pec.
   --size WxH    hoop in inches (4x4, 5x7, 6x10, 8x8, 8x12) or millimetres (100x100mm)
   --colours N   exactly N colours (default: automatic)
   --threads     brother (the 63-colour chart, default) or exact (the picture's colours)
@@ -831,7 +936,7 @@ def cli(argv):
         design = design_json(doc, s)
     plan = Plan.make(design)
     low = out.lower()
-    fmt = FMT_DST if low.endswith(".dst") else FMT_PEC if low.endswith(".pec") else FMT_PES
+    fmt = format_for(low)
     try:
         plan.write(out, fmt, safe_name(out))
     except EngineError as e:

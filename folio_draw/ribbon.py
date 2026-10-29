@@ -1,4 +1,8 @@
-"""The ribbon: File menu, Home / View tabs and the contextual Text tab."""
+"""The ribbon: File menu, Home / View tabs and the contextual Text tab.
+
+The frame (tab strip, tab pages, folding groups into one button on narrow windows, Ribbon
+Display Options) is the suite's shared ribbon module, folio-suite/shared/ribbon.py, copied in
+as suiteribbon.py (X3-04). The tabs' contents are Paint's: tools, brushes, colours."""
 
 import math
 
@@ -12,6 +16,7 @@ from .tools import SEL_TOOLS
 from .stabilizer import TOOLS as STAB_TOOLS, NAMES as STAB_NAMES, TIPS as STAB_TIPS
 from . import shapes
 from .icons import Icon, ink as icon_ink
+from . import suiteribbon as SR
 
 PALETTE = [
     (0, 0, 0, 255), (127, 127, 127, 255), (136, 0, 21, 255), (237, 28, 36, 255), (255, 127, 39, 255),
@@ -201,19 +206,37 @@ def small_button(icon, label=None, tooltip=None, toggle=False, menu=None, painte
 
 
 def group(label, child):
-    g = _box(True, 0)
+    """A captioned group of the suite's ribbon, in Draw's look."""
+    g = SR.Group(label, [child])
+    g.get_style_context().add_class("fd-group")
+    cap = g.cap_row.get_child()
+    cap.get_style_context().add_class("fd-group-label")
     child.set_vexpand(True)
-    g.pack_start(child, True, True, 0)
-    lbl = Gtk.Label(label=label)
-    lbl.get_style_context().add_class("fd-group-label")
-    g.pack_end(lbl, False, False, 1)
     return g
 
 
+class _Sep(Gtk.Separator):
+    """Where a page puts a separator; the shared ribbon draws its own between groups."""
+
+
 def sep():
-    s = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+    s = _Sep(orientation=Gtk.Orientation.VERTICAL)
     s.get_style_context().add_class("fd-sep")
     return s
+
+
+def page_tab(name, label, row, contextual=False):
+    """A page built as a row of groups, as a tab of the shared ribbon."""
+    t = SR.Tab(name, None, contextual=contextual)
+    t.label = label
+    t.body.get_style_context().add_class("fd-ribbon")
+    for ch in list(row.get_children()):
+        row.remove(ch)
+        if isinstance(ch, SR.Group):
+            t.add(ch)
+        elif not isinstance(ch, _Sep):
+            t.body.pack_start(ch, False, False, 2)
+    return t
 
 
 def menu_item(label, icon=None, cb=None, accel=None, check=None):
@@ -266,53 +289,67 @@ class Swatch(Gtk.Button):
 
 # --------------------------------------------------------------------------- ribbon
 
-class Ribbon(Gtk.Box):
+class Ribbon(SR.Ribbon):
     def __init__(self, win):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        super().__init__(lambda action: None, lambda: None)
         self.win = win
         self.st = win.state
         self._sync = False
         self.tool_buttons = {}
         self.shape_buttons = {}
-
-        # tab strip
-        tabs = _box(False, 0)
-        tabs.get_style_context().add_class("fd-tabs")
+        self.tabbar.get_style_context().add_class("fd-tabs")
         # File opens the full-window File view, like every app of the suite
-        self.file_btn = Gtk.Button(label="File")
+        self.file_btn = self.file_button
         self.file_btn.get_style_context().add_class("fd-tab")
         self.file_btn.get_style_context().add_class("fd-file")
-        self.file_btn.set_relief(Gtk.ReliefStyle.NONE)
         self.file_btn.set_tooltip_text("File (Alt+F)\nNew, open, save, print and export pictures.")
-        self.file_btn.connect("clicked", lambda *_: self.win.show_backstage())
-        tabs.pack_start(self.file_btn, False, False, 0)
-
-        self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        self.connect("file-clicked", lambda *_: self.win.show_backstage())
+        # Draw's pages are as tall as Paint's: no fixed 96 px here
+        self.stack.set_size_request(-1, -1)
+        self.stack.set_vhomogeneous(False)
+        self.collapse_btn.get_style_context().add_class("fd-tab")
+        self.on_display_mode = self._display_mode
         self.tab_buttons = {}
         self.home = self._home()
         self.view = self._view()
         self.text = self._text()
         self.embroidery = win.emb.build_tab()
-        for name, title, page in (("home", "Home", self.home), ("view", "View", self.view), ("embroidery", "Embroidery", self.embroidery),
-                                  ("text", "Text", self.text)):
-            b = Gtk.ToggleButton(label=title)
-            b.get_style_context().add_class("fd-tab")
-            b.set_relief(Gtk.ReliefStyle.NONE)
-            b.connect("toggled", self._on_tab, name)
-            tabs.pack_start(b, False, False, 0)
-            self.tab_buttons[name] = b
-            self.stack.add_named(page, name)
+        self.pages = {}
+        for name, title, row in (("home", "Home", self.home), ("view", "View", self.view), ("embroidery", "Embroidery", self.embroidery),
+                                 ("text", "Text", self.text)):
+            t = page_tab(name, title, row, contextual=(name == "text"))
+            self.add_tab(t)
+            self.tab_buttons[name] = t.button
+            self.pages[name] = t
+            setattr(self, name, t.body)
         self.tab_buttons["text"].get_style_context().add_class("fd-context")
-        self.tab_buttons["text"].set_no_show_all(True)
         self.tab_buttons["embroidery"].set_no_show_all(True)
-        self.pack_start(tabs, False, False, 0)
-        holder = _box(False)
-        holder.get_style_context().add_class("fd-ribbon")
-        holder.pack_start(self.stack, True, True, 0)
-        self.pack_start(holder, False, False, 0)
-        self.tab_buttons["home"].set_active(True)
+        self.show_tab("home")
         self._assign_keytips()
+
+    def make_tab_button(self, tab):
+        b = Gtk.ToggleButton(label=tab.label)
+        b.get_style_context().add_class("fd-tab")
+        b.connect("toggled", self._on_tab, tab.name)
+        return b
+
+    def select(self, tab):
+        # a toggle button set from here emits "clicked" again: once is enough
+        if getattr(self, "_selecting", False):
+            return
+        self._selecting = True
+        try:
+            super().select(tab)
+            self._sync = True
+            for n, b in getattr(self, "tab_buttons", {}).items():
+                b.set_active(n == tab.name)
+            self._sync = False
+        finally:
+            self._selecting = False
+
+    def _display_mode(self, what, value):
+        if what == "qat" and hasattr(self.win, "set_qat_shown"):
+            self.win.set_qat_shown(value)
 
     def _assign_keytips(self):
         """Letters for KeyTips (Alt), per tab."""
@@ -360,33 +397,30 @@ class Ribbon(Gtk.Box):
         for key, tip in (("place", "P"), ("trace", "C"), ("tool", "S"), ("nodes", "N"), ("merge", "M"), ("split", "SP"), ("fillholes", "FH"),
                          ("recolour", "T"), ("delete", "D"), ("type", "Y"), ("stitch", "R"), ("stop", "O"), ("tostitches", "TS"), ("envelope", "EN"), ("knockdown", "K"), ("lettering", "L"), ("reset", "RL"),
                          ("preview", "V"), ("colours", "Q"), ("hoop", "H"), ("import", "I"), ("export", "E"), ("template", "TP"),
-                         ("mirror", "MI")):
+                         ("mirror", "MI"), ("svg", "G")):
             kt("embroidery", eb[key], tip)
 
     def _on_tab(self, btn, name):
         if self._sync:
             return
-        self._sync = True
         if btn.get_active():
-            for n, b in self.tab_buttons.items():
-                if n != name:
-                    b.set_active(False)
-            self.stack.set_visible_child_name(name)
-        elif self.stack.get_visible_child_name() == name:
+            self.select(self.pages[name])
+        elif self.current is not None and self.current.name == name:
+            self._sync = True
             btn.set_active(True)
-        self._sync = False
+            self._sync = False
 
     def show_tab(self, name):
-        self.tab_buttons[name].set_active(True)
+        self.select(self.pages[name])
 
     def set_text_tab(self, visible):
         b = self.tab_buttons["text"]
         if visible:
             b.show()
-            b.set_active(True)
+            self.show_tab("text")
         else:
-            if b.get_active():
-                self.tab_buttons["home"].set_active(True)
+            if self.current is self.pages["text"]:
+                self.show_tab("home")
             b.hide()
 
     # ------------------------------------------------------------------ Home
