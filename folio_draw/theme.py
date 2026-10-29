@@ -73,14 +73,14 @@ headerbar.fd-header, .fd-header {
 .fd-sep, .fd-ribbon .folio-sep { background: @fd_line; min-width: 1px; margin: 6px 2px; }
 .fd-ribbon .folio-group { margin: 0 2px; }
 
-.fd-rbtn, .fd-rbtn.toggle, menubutton.fd-rbtn > button {
+.fd-rbtn, .fd-rbtn.toggle, menubutton.fd-rbtn > button, .fd-ribbon .folio-btn, .fd-ribbon .folio-btn.large {
   background: transparent; background-image: none; border: 1px solid transparent; box-shadow: none;
   border-radius: 3px; padding: 1px 3px; color: @fd_text; min-height: 0; min-width: 0; }
-.fd-rbtn:hover { background: @fd_hover; border-color: @fd_hover; }
-.fd-rbtn:active { background: @fd_press; }
+.fd-rbtn:hover, .fd-ribbon .folio-btn:hover { background: @fd_hover; border-color: @fd_hover; }
+.fd-rbtn:active, .fd-ribbon .folio-btn:active { background: @fd_press; }
 .fd-rbtn:checked, .fd-rbtn.fd-on { background: @fd_tint2; border-color: @fd_check_border; }
 .fd-rbtn:disabled label { color: #a8a8a8; }
-.fd-rbtn label { color: @fd_text; font-size: 0.92em; }
+.fd-rbtn label, .fd-ribbon .folio-btn label { color: @fd_text; font-size: 0.92em; }
 
 .fd-swatch { padding: 0; min-width: 0; min-height: 0; border-radius: 0; border: 1px solid transparent;
   background: transparent; background-image: none; box-shadow: none; }
@@ -272,15 +272,32 @@ tooltip label { color: #f0f0f0; }
 _dark_provider = None
 
 
+def with_backdrop(css):
+    """X3-05: a window without focus (on Wayland a window is unfocused while its own menu or
+    popover is open) is in the :backdrop state, where the desktop theme repaints buttons, title bars
+    and labels. Every rule is repeated for :backdrop, one step more specific, so Draw keeps its colours."""
+    import re
+    text = re.sub(rb"/\*.*?\*/", b"", css, flags=re.S)
+    extra = []
+    for m in re.finditer(rb"([^{}]+)\{([^{}]*)\}", text):
+        head = m.group(1)
+        head = head[head.rfind(b";") + 1:] if b";" in head else head
+        sels = [x.strip() for x in head.split(b",") if x.strip()]
+        sels = [x for x in sels if not x.startswith(b"@") and b":backdrop" not in x]
+        if sels:
+            extra.append(b", ".join(x + b":backdrop" for x in sels) + b" {" + m.group(2) + b"}")
+    return css + b"\n/* the same, for windows without focus */\n" + b"\n".join(extra) + b"\n"
+
+
 def install():
     global _dark_provider
     from . import appearance
     if _dark_provider is not None:
         return   # once per process
     prov = Gtk.CssProvider()
-    prov.load_from_data(CSS)
+    prov.load_from_data(with_backdrop(CSS))
     _dark_provider = Gtk.CssProvider()
-    _dark_provider.load_from_data(DARK_CSS)
+    _dark_provider.load_from_data(with_backdrop(DARK_CSS))
     screen = Gdk.Screen.get_default()
     if screen is None:
         return
