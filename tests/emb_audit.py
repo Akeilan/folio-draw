@@ -278,8 +278,8 @@ win.canvas.sync()
 ui.c_emb_trace({"colours": 0, "background": "remove", "crop": False, "smoothing": 1, "min_area": 1.5, "edge_radius": 2})
 check(len(M.shape_layers(doc)) == 2 and all(ui.spec(i)["objects"] for i in M.shape_layers(doc)),
       "drawn artwork converts to shapes: the fill and its outline on layers of their own")
-win.cmd("resize")
-check("isn't available" in win.hint_label.get_text(), "Resize says it isn't available in an embroidery document")
+win.cmd("crop")
+check("isn't available" in win.hint_label.get_text(), "Crop says it isn't available in an embroidery document")
 win.state.tool = "pencil"
 doc.set_active(M.shape_layers(doc)[0])
 ui.ensure_paint_layer()
