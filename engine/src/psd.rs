@@ -655,10 +655,11 @@ pub fn save(doc: &Doc) -> Vec<u8> {
             }
         }
         if x1 <= x0 || y1 <= y0 {
+            // an empty layer keeps a single clear pixel so it stays a layer when opened again
             x0 = 0;
             y0 = 0;
-            x1 = 0;
-            y1 = 0;
+            x1 = 1.min(w);
+            y1 = 1.min(h);
         }
         let (lw, lh) = (x1 - x0, y1 - y0);
         for v in [y0, x0, y1, x1] {
