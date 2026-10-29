@@ -76,7 +76,15 @@ win.set_tool("brush")
 rb.size_btn.set_active(True)
 pump(0.3)
 pop = rb.size_pop
-look(pop.get_toplevel() if pop.get_toplevel() is not win else win, "size menu")
+if os.environ.get("GDK_BACKEND") == "wayland":
+    # X3-05: on Wayland the menu is a surface of its own over the window, and the window is
+    # unfocused (:backdrop) while it is open: look at each on its own
+    look(pop, "size menu")
+    pop.set_opacity(0)
+    look(win, "the window behind the size menu")
+    pop.set_opacity(1)
+else:
+    look(pop.get_toplevel() if pop.get_toplevel() is not win else win, "size menu")
 rb.size_btn.set_active(False)
 win.show_backstage()
 for key in win.backstage.nav_buttons:
