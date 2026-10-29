@@ -81,6 +81,8 @@ _sig("fd_sel_poly", None, _P, POINTER(c_float), c_uint)
 _sig("fd_sel_set_mode", None, _P, c_uint)
 _sig("fd_history", c_uint, _P, c_char_p, c_uint)
 _sig("fd_label_last", None, _P, c_char_p)
+_sig("fd_undo_mark", ctypes.c_uint32, _P)
+_sig("fd_group_since", None, _P, ctypes.c_uint32, c_char_p)
 _sig("fd_sel_outline", c_uint, _P, POINTER(c_int), c_uint)
 _sig("fd_sel_magic", None, _P, c_int, c_int, c_uint, c_int)
 _sig("fd_sel_all", None, _P)
@@ -130,7 +132,7 @@ _sig("fd_crop_to_selection", c_int, _P)
 
 TOOL_BRUSH, TOOL_PENCIL, TOOL_ERASER, TOOL_AIRBRUSH, TOOL_CALLIG, TOOL_CALLIG2, TOOL_MARKER = range(7)
 (FMT_PNG, FMT_ORA, FMT_BMP24, FMT_BMP32, FMT_JPEG, FMT_GIF, FMT_GIF_ANIM,
- FMT_WEBP, FMT_WEBP_ANIM, FMT_TIFF, FMT_ICO) = range(11)
+ FMT_WEBP, FMT_WEBP_ANIM, FMT_TIFF, FMT_ICO, FMT_PSD) = range(12)
 FLIP_H, FLIP_V, ROT_CW, ROT_180, ROT_CCW = range(5)
 
 
@@ -300,6 +302,14 @@ class Document:
 
     def label_last(self, label):
         L.fd_label_last(self.h, label.encode("utf-8"))
+
+    def undo_mark(self):
+        """A mark for group_since: how many undo steps there are now."""
+        return L.fd_undo_mark(self.h)
+
+    def group_since(self, mark, label=""):
+        """Every step made since `mark` becomes one undo step."""
+        L.fd_group_since(self.h, int(mark), label.encode("utf-8"))
 
     def undo(self):
         return bool(L.fd_undo(self.h))

@@ -70,7 +70,8 @@ headerbar.fd-header, .fd-header {
 /* ---------- ribbon body: 96 px + 1 px line ---------- */
 .fd-ribbon { background: @fd_panel; border-bottom: 1px solid @fd_line; padding: 2px 4px 0 4px; min-height: 93px; }
 .fd-group-label { color: @fd_caption; font-size: 0.85em; }
-.fd-sep { background: @fd_line; min-width: 1px; margin: 6px 2px; }
+.fd-sep, .fd-ribbon .folio-sep { background: @fd_line; min-width: 1px; margin: 6px 2px; }
+.fd-ribbon .folio-group { margin: 0 2px; }
 
 .fd-rbtn, .fd-rbtn.toggle, menubutton.fd-rbtn > button {
   background: transparent; background-image: none; border: 1px solid transparent; box-shadow: none;

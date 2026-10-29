@@ -5,6 +5,7 @@ pub mod colour;
 pub mod convert;
 pub mod ffi;
 pub mod formats;
+pub mod formats2;
 pub mod geom;
 pub mod json;
 pub mod plan;

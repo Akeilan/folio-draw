@@ -38,6 +38,7 @@ SAVE_FORMATS = {
     ".tiff": (E.FMT_TIFF, "TIFF picture"),
     ".ico": (E.FMT_ICO, "Windows icon"),
     ".ora": (E.FMT_ORA, "OpenRaster (keeps layers)"),
+    ".psd": (E.FMT_PSD, "Photoshop picture (keeps layers)"),
 }
 OPEN_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.bmp", "*.dib", "*.gif", "*.ora",
                  "*.webp", "*.tif", "*.tiff", "*.ico", "*.cur", "*.psd", "*.psb", "*.svg", "*.svgz",
@@ -47,7 +48,7 @@ OPEN_PATTERNS = ["*.png", "*.jpg", "*.jpeg", "*.jpe", "*.jfif", "*.bmp", "*.dib"
 ANIM_FORMATS = {E.FMT_GIF: E.FMT_GIF_ANIM, E.FMT_WEBP: E.FMT_WEBP_ANIM}
 # commands that may run while an animation preview is playing
 PLAYBACK_SAFE = {"play", "zoom_in", "zoom_out", "zoom_100", "zoom_fit", "view_toggle", "fullscreen", "gif_loop", "about"}
-FLAT_ALPHA_FORMATS = {E.FMT_PNG, E.FMT_ORA, E.FMT_GIF, E.FMT_GIF_ANIM, E.FMT_WEBP, E.FMT_WEBP_ANIM, E.FMT_TIFF, E.FMT_ICO}
+FLAT_ALPHA_FORMATS = {E.FMT_PNG, E.FMT_ORA, E.FMT_GIF, E.FMT_GIF_ANIM, E.FMT_WEBP, E.FMT_WEBP_ANIM, E.FMT_TIFF, E.FMT_ICO, E.FMT_PSD}
 
 # Quick Access Toolbar: command -> (icon, tooltip), in menu order
 QAT_COMMANDS = {
@@ -99,6 +100,7 @@ SEARCH_COMMANDS = [
     ("Frames view", ("frames_view",), ""), ("Play animation", ("play",), "Space"),
     ("About Folio Draw", ("about",), ""),
     ("New embroidery", ("emb_new",), ""), ("Place picture on the hoop", ("emb_place",), "Ctrl+Shift+P"),
+    ("Shapes from drawing (SVG)", ("emb_svg",), ""),
     ("Convert picture to shapes", ("emb_trace",), ""), ("Select shapes", ("emb_tool",), ""),
     ("Edit nodes", ("emb_nodes",), ""), ("Merge shapes", ("emb_merge",), ""), ("Split shape", ("emb_split",), ""),
     ("Fill holes", ("emb_fill_holes",), ""),
@@ -119,7 +121,7 @@ CMD_LABELS = {tuple(cmd): label for label, cmd, _ in SEARCH_COMMANDS}
 CMD_LABELS.update({("delete",): "Delete", ("cut",): "Cut", ("paste",): "Paste", ("crop",): "Crop",
                    ("layer_add",): "New layer", ("adjust",): "Adjustment"})
 # commands an embroidery document refuses (they would turn shapes into pixels or change scale)
-from .embui import BLOCKED as EMB_BLOCKED  # noqa: E402
+from .embui import BLOCKED as EMB_BLOCKED, TRANSFORMS as EMB_TRANSFORMS  # noqa: E402
 from . import embroidery as EMB  # noqa: E402
 
 TOOL_LABELS = {"emb": "Shapes", "pencil": "Pencil", "brush": "Brush", "eraser": "Eraser", "fill": "Fill with color", "text": "Text",
@@ -707,7 +709,7 @@ class Window(Gtk.ApplicationWindow):
     def open_path(self, path, ask=True):
         if ask and not self.confirm_discard():
             return False
-        if os.path.splitext(path)[1].lower() in (".pes", ".dst", ".pec"):
+        if os.path.splitext(path)[1].lower() in EMB.FORMATS:
             # an embroidery design: a new embroidery document holding it as stitches
             self.set_document(E.Document.new(16, 16, (0, 0, 0, 0)), None)
             o = self.emb.c_emb_import(path)
@@ -761,7 +763,16 @@ class Window(Gtk.ApplicationWindow):
                 self.gif_mode = "anim" if r == 2 else "flat"
             if self.gif_mode == "anim":
                 fmt = ANIM_FORMATS[fmt]
-        if fmt not in (E.FMT_ORA, E.FMT_GIF_ANIM, E.FMT_WEBP_ANIM) and doc.layer_count() > 1 and not self.warned_flatten:
+        if self.emb.active() and fmt != E.FMT_ORA:
+            r = D.ask_choice(self, "Save a picture of the embroidery?",
+                             "Only OpenRaster keeps the shapes, lettering and stitches as you can go on editing them; "
+                             "%s keeps their pixels. Machine files come from Embroidery ▸ Export." % os.path.splitext(path)[1].upper().lstrip("."),
+                             ["Cancel", "Save as OpenRaster instead", "Save the picture"], default=1)
+            if r == 1:
+                return self.cmd_save_as(".ora")
+            if r != 2:
+                return False
+        if fmt not in (E.FMT_ORA, E.FMT_PSD, E.FMT_GIF_ANIM, E.FMT_WEBP_ANIM) and doc.layer_count() > 1 and not self.warned_flatten:
             r = D.ask_choice(self, "Save a flattened copy?",
                              "This picture has %d layers. %s files can only hold one, so the layers will be merged in the saved file "
                              "(they stay separate here). Choose OpenRaster to keep the layers." % (doc.layer_count(), os.path.splitext(path)[1].upper().lstrip(".")),
@@ -807,7 +818,7 @@ class Window(Gtk.ApplicationWindow):
         sb.get_style_context().add_class("fd-primary")
         dlg.set_do_overwrite_confirmation(True)
         filters = {}
-        for e in (".png", ".jpg", ".bmp", ".gif", ".webp", ".tif", ".ico", ".ora"):
+        for e in (".png", ".jpg", ".bmp", ".gif", ".webp", ".tif", ".ico", ".ora", ".psd"):
             f = Gtk.FileFilter()
             f.set_name("%s (*%s)" % (SAVE_FORMATS[e][1], e))
             f.add_pattern("*" + e)
@@ -968,6 +979,12 @@ class Window(Gtk.ApplicationWindow):
         fn = getattr(self, "c_" + name, None) or getattr(self.emb, "c_" + name, None)
         if fn is None:
             return
+        if name in EMB_TRANSFORMS and self.emb.active():
+            self._action = CMD_LABELS.get((name,)) or name
+            r = self.emb.transform_cmd(name, *args)
+            self.ribbon.refresh()
+            self.refresh_state()
+            return r
         if name in EMB_BLOCKED and self.emb.active():
             self.hint("%s isn't available in an embroidery document: the hoop sets the size, and shapes stay shapes." % EMB_BLOCKED[name], 8)
             return

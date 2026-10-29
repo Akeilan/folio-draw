@@ -1,2 +1,2 @@
 """Folio Draw — a simple drawing program with layers and real transparency."""
-__version__ = "1.9.2"
+__version__ = "1.10.0"

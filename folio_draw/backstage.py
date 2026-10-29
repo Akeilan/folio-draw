@@ -26,7 +26,8 @@ SAVE_FORMATS = [(".png", "PNG picture", "Lossless, keeps transparency (flattened
                 (".webp", "WebP picture", "Lossless and compact, keeps transparency; layers can become frames"),
                 (".tif", "TIFF picture", "Lossless, keeps transparency; for print and archiving"),
                 (".ico", "Windows icon", "Icon sizes from 16 to 256 pixels, keeps transparency"),
-                (".ora", "OpenRaster picture", "Keeps every layer, for editing later")]
+                (".ora", "OpenRaster picture", "Keeps every layer, for editing later"),
+                (".psd", "Photoshop picture", "Keeps every layer with its name, opacity and blend mode")]
 
 
 def _heading(text, cls="fd-bs-title"):

@@ -5,7 +5,7 @@ import math
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 MAROON = (0.50, 0.0, 0.0)
 INK = (0.20, 0.20, 0.22)
@@ -1001,3 +1001,43 @@ class Icon(Gtk.DrawingArea):
         else:
             paint_icon(cr, self.name, self.size, ink, acc)
         return False
+
+    def snapshot_pixbuf(self, size=32):
+        """The icon drawn at `size` as a pixbuf (a ribbon group folded into one button shows it)."""
+        return pixbuf(self.name, size, self.painter)
+
+
+def _chevron(cr, ink, acc):
+    cr.set_source_rgb(*ink)
+    cr.move_to(7, 10)
+    cr.line_to(12, 15)
+    cr.line_to(17, 10)
+    cr.stroke()
+
+
+ICONS.setdefault("chevron", _chevron)
+
+
+def pixbuf(name, size, painter=None):
+    """An icon as a GdkPixbuf (used by the suite's shared ribbon code)."""
+    import cairo
+    if painter is None and name not in ICONS:
+        return None
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+    cr = cairo.Context(surf)
+    ink, acc = ink_colors()
+    if painter:
+        painter(cr, size, ink, acc)
+    else:
+        paint_icon(cr, name, size, ink, acc)
+    surf.flush()
+    return Gdk.pixbuf_get_from_surface(surf, 0, 0, size, size)
+
+
+def image(name, size):
+    """An icon as a Gtk.Image (shared ribbon code)."""
+    return Icon(name, size)
+
+
+def swatch_pixbuf(name, size, color):
+    return pixbuf(name, size)

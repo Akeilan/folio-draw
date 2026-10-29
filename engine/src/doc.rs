@@ -71,6 +71,8 @@ pub enum UndoKind {
     Props { layer_id: u32, name: String, opacity: f32, visible: bool, blend: u8, delay_ms: u32 },
     /// A text layer typed again (or turned into pixels): its pixels and description before.
     Text { layer_id: u32, text: String, px: Vec<u8> },
+    /// Several steps undone and redone as one (in the order they were made).
+    Group(Vec<UndoKind>),
 }
 
 pub struct UndoStep {
@@ -868,6 +870,30 @@ impl Doc {
     }
 
     /// Names the newest step if it has no name yet.
+    /// How many undo steps there are now (a mark for `group_since`).
+    pub fn undo_mark(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Join every undo step made since `mark` into one, labelled `label`.
+    pub fn group_since(&mut self, mark: usize, label: &str) {
+        let mark = mark.min(self.undo.len());
+        if self.undo.len() - mark < 2 {
+            if self.undo.len() > mark && !label.is_empty() {
+                self.undo.last_mut().unwrap().label = label.to_string();
+            }
+            return;
+        }
+        let steps: Vec<UndoStep> = self.undo.drain(mark..).collect();
+        let id = steps.last().unwrap().id;
+        self.undo_bytes -= steps.iter().map(|s| s.bytes).sum::<usize>();
+        let kinds: Vec<UndoKind> = steps.into_iter().map(|s| s.kind).collect();
+        let kind = UndoKind::Group(kinds);
+        let bytes = step_bytes(&kind);
+        self.undo_bytes += bytes;
+        self.undo.push(UndoStep { id, kind, bytes, label: label.to_string() });
+    }
+
     pub fn label_last(&mut self, label: &str) {
         if let Some(s) = self.undo.last_mut() {
             if s.label.is_empty() {
@@ -986,6 +1012,12 @@ impl Doc {
                 } else {
                     UndoKind::Text { layer_id, text, px }
                 }
+            }
+            UndoKind::Group(steps) => {
+                // undo the last made first; the reverse steps, replayed in turn, redo them
+                // (applying that reverse group again walks it backwards too, so the redo order is right)
+                let rev: Vec<UndoKind> = steps.into_iter().rev().map(|k| self.apply_step(k)).collect();
+                UndoKind::Group(rev)
             }
             UndoKind::Props { layer_id, name, opacity, visible, blend, delay_ms } => {
                 if let Some(li) = self.layer_idx(layer_id) {
@@ -2775,6 +2807,7 @@ fn step_bytes(k: &UndoKind) -> usize {
         UndoKind::Structure { pool, mods, .. } => pool.iter().map(|l| l.px.len()).sum::<usize>() + mods.iter().map(|m| m.1.len()).sum::<usize>(),
         UndoKind::Text { px, text, .. } => px.len() + text.len(),
         UndoKind::Props { name, .. } => name.len(),
+        UndoKind::Group(v) => v.iter().map(step_bytes).sum(),
     }
 }
 

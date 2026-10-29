@@ -560,6 +560,188 @@ fn read_record(r: &mut R) -> Result<Rec, String> {
     })
 }
 
+
+// ------------------------------------------------------------------ writing (D3-04)
+
+/// PackBits for one row: repeats of 3+ as runs, the rest literal.
+fn rle_row(row: &[u8], o: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < row.len() {
+        let mut j = i + 1;
+        while j < row.len() && row[j] == row[i] && j - i < 128 {
+            j += 1;
+        }
+        if j - i >= 3 {
+            o.push((1i16 - (j - i) as i16) as i8 as u8);
+            o.push(row[i]);
+            i = j;
+        } else {
+            let s = i;
+            let mut e = i;
+            while e < row.len() && e - s < 128 && !(e + 2 < row.len() && row[e] == row[e + 1] && row[e] == row[e + 2]) {
+                e += 1;
+            }
+            o.push((e - s - 1) as u8);
+            o.extend_from_slice(&row[s..e]);
+            i = e;
+        }
+    }
+}
+
+/// One channel of a w×h block, RLE: [compression 1][row lengths][rows].
+fn rle_channel(get: impl Fn(usize, usize) -> u8, w: usize, h: usize, with_kind: bool) -> (Vec<u8>, Vec<u8>) {
+    let mut counts = Vec::with_capacity(h * 2);
+    let mut rows = Vec::new();
+    let mut row = vec![0u8; w];
+    for y in 0..h {
+        for (x, v) in row.iter_mut().enumerate() {
+            *v = get(x, y);
+        }
+        let before = rows.len();
+        rle_row(&row, &mut rows);
+        counts.extend_from_slice(&((rows.len() - before) as u16).to_be_bytes());
+    }
+    let mut head = Vec::new();
+    if with_kind {
+        head.extend_from_slice(&1u16.to_be_bytes());
+    }
+    head.extend_from_slice(&counts);
+    (head, rows)
+}
+
+fn blend_key(b: u8) -> &'static [u8; 4] {
+    match b {
+        BLEND_MULTIPLY => b"mul ",
+        BLEND_SCREEN => b"scrn",
+        BLEND_OVERLAY => b"over",
+        BLEND_DARKEN => b"dark",
+        BLEND_LIGHTEN => b"lite",
+        BLEND_DIFFERENCE => b"diff",
+        BLEND_ADD => b"lddg",
+        _ => b"norm",
+    }
+}
+
+/// The document as an 8-bit RGB Photoshop file: every layer (cropped to what it holds) with its
+/// name, opacity, visibility and blend mode, and the flattened picture for programs that read
+/// only that. Layers are written bottom first, as Photoshop lists them.
+pub fn save(doc: &Doc) -> Vec<u8> {
+    let (w, h) = (doc.w, doc.h);
+    let mut o = Vec::new();
+    o.extend_from_slice(b"8BPS");
+    o.extend_from_slice(&1u16.to_be_bytes());
+    o.extend_from_slice(&[0; 6]);
+    o.extend_from_slice(&3u16.to_be_bytes());
+    o.extend_from_slice(&(h as u32).to_be_bytes());
+    o.extend_from_slice(&(w as u32).to_be_bytes());
+    o.extend_from_slice(&8u16.to_be_bytes());
+    o.extend_from_slice(&3u16.to_be_bytes());
+    o.extend_from_slice(&0u32.to_be_bytes()); // colour mode data
+    o.extend_from_slice(&0u32.to_be_bytes()); // image resources
+    let mut recs = Vec::new();
+    let mut data = Vec::new();
+    for l in &doc.layers {
+        // the box of what the layer holds
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+        for y in 0..h {
+            let row = &l.px[y * w * 4..(y + 1) * w * 4];
+            for x in 0..w {
+                if row[x * 4 + 3] != 0 {
+                    x0 = x0.min(x);
+                    x1 = x1.max(x + 1);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if x1 <= x0 || y1 <= y0 {
+            x0 = 0;
+            y0 = 0;
+            x1 = 0;
+            y1 = 0;
+        }
+        let (lw, lh) = (x1 - x0, y1 - y0);
+        for v in [y0, x0, y1, x1] {
+            recs.extend_from_slice(&(v as i32).to_be_bytes());
+        }
+        recs.extend_from_slice(&4u16.to_be_bytes());
+        let px = &l.px;
+        let mut chans = Vec::new();
+        for (id, k) in [(-1i16, 3usize), (0, 0), (1, 1), (2, 2)] {
+            let (head, rows) = rle_channel(|x, y| px[((y0 + y) * w + x0 + x) * 4 + k], lw, lh, true);
+            recs.extend_from_slice(&(id as u16).to_be_bytes());
+            recs.extend_from_slice(&((head.len() + rows.len()) as u32).to_be_bytes());
+            chans.push((head, rows));
+        }
+        recs.extend_from_slice(b"8BIM");
+        recs.extend_from_slice(blend_key(l.blend));
+        recs.push((l.opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
+        recs.push(0); // clipping
+        recs.push(if l.visible { 0 } else { 2 } | 8);
+        recs.push(0);
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0u32.to_be_bytes()); // no mask
+        extra.extend_from_slice(&0u32.to_be_bytes()); // no blending ranges
+        // the name as a Pascal string padded to 4, then in full as Unicode
+        let ascii: Vec<u8> = l.name.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c as u8 } else { b'_' }).take(255).collect();
+        let start = extra.len();
+        extra.push(ascii.len() as u8);
+        extra.extend_from_slice(&ascii);
+        while (extra.len() - start) % 4 != 0 {
+            extra.push(0);
+        }
+        let u: Vec<u16> = l.name.encode_utf16().collect();
+        let mut lu = Vec::new();
+        lu.extend_from_slice(&(u.len() as u32).to_be_bytes());
+        for c in &u {
+            lu.extend_from_slice(&c.to_be_bytes());
+        }
+        while lu.len() % 4 != 0 {
+            lu.push(0);
+        }
+        extra.extend_from_slice(b"8BIMluni");
+        extra.extend_from_slice(&(lu.len() as u32).to_be_bytes());
+        extra.extend_from_slice(&lu);
+        recs.extend_from_slice(&(extra.len() as u32).to_be_bytes());
+        recs.extend_from_slice(&extra);
+        for (head, rows) in chans {
+            data.extend_from_slice(&head);
+            data.extend_from_slice(&rows);
+        }
+    }
+    let mut li = Vec::new();
+    // a negative count: the first alpha channel holds the merged picture's transparency
+    li.extend_from_slice(&(-(doc.layers.len() as i16) as u16).to_be_bytes());
+    li.extend_from_slice(&recs);
+    li.extend_from_slice(&data);
+    if li.len() % 2 == 1 {
+        li.push(0);
+    }
+    let mut lm = Vec::new();
+    lm.extend_from_slice(&(li.len() as u32).to_be_bytes());
+    lm.extend_from_slice(&li);
+    lm.extend_from_slice(&0u32.to_be_bytes()); // global mask
+    o.extend_from_slice(&(lm.len() as u32).to_be_bytes());
+    o.extend_from_slice(&lm);
+    // the merged picture: RLE, all row counts first, then the planes
+    let merged = doc.flatten_rgba();
+    o.extend_from_slice(&1u16.to_be_bytes());
+    let mut counts = Vec::new();
+    let mut planes = Vec::new();
+    for k in 0..3 {
+        let (head, rows) = rle_channel(|x, y| {
+            // over white, as Photoshop's composite has no transparency
+            let p = &merged[(y * w + x) * 4..(y * w + x) * 4 + 4];
+            ((p[k] as u32 * p[3] as u32 + 255 * (255 - p[3] as u32) + 127) / 255) as u8
+        }, w, h, false);
+        counts.extend_from_slice(&head);
+        planes.extend_from_slice(&rows);
+    }
+    o.extend_from_slice(&counts);
+    o.extend_from_slice(&planes);
+    o
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -795,5 +977,28 @@ pub mod tests {
         let n = g.len();
         g.truncate(n - 20);
         let _ = load(&g);
+    }
+
+    #[test]
+    fn save_reads_back() {
+        let mut d = Doc::new(40, 30, [255, 255, 255, 255]);
+        let mut px = vec![0u8; 40 * 30 * 4];
+        for y in 5..20 {
+            for x in 8..30 {
+                let o = (y * 40 + x) * 4;
+                px[o..o + 4].copy_from_slice(&[200, 30, 40, 255]);
+            }
+        }
+        d.push_layer("Röd kvadrat", px, 0.5, true, BLEND_MULTIPLY);
+        d.push_layer("Hidden", vec![0u8; 40 * 30 * 4], 1.0, false, BLEND_NORMAL);
+        let bytes = save(&d);
+        let back = load(&bytes).unwrap();
+        assert_eq!(back.layers.len(), 3);
+        assert_eq!(back.layers[1].name, "Röd kvadrat");
+        assert!((back.layers[1].opacity - 0.5).abs() < 0.01);
+        assert_eq!(back.layers[1].blend, BLEND_MULTIPLY);
+        assert!(!back.layers[2].visible);
+        assert_eq!(back.layers[1].px, d.layers[1].px);
+        assert_eq!(back.layers[0].px, d.layers[0].px);
     }
 }

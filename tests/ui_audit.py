@@ -477,6 +477,10 @@ def walk(w):
 
 
 clicked = 0
+for _t in win.ribbon.pages.values():
+    for _g in getattr(_t, "groups", []):
+        _g.set_collapsed(False)
+pump(0.05)
 for w in list(walk(win.ribbon.home)) + list(walk(win.ribbon.view)):
     if isinstance(w, Gtk.Button):
         print("  click", (w.get_tooltip_text() or "").split("\n")[0], flush=True)
@@ -545,10 +549,35 @@ check("Alt shows KeyTips on the tabs, Quick Access and search", win.keytips.acti
 key("h")
 pump(0.1)
 tips = win.keytips.tips()
-check("H shows the Home tab's KeyTips", "P" in tips and "SE" in tips and "EC" in tips, tips)
+check("H shows the Home tab's KeyTips", "P" in tips and "SE" in tips and ("EC" in tips or "ZC" in tips), tips)
 key("e")
 pump(0.1)
 check("E picks the eraser", win.state.tool == "eraser" and not win.keytips.active, win.state.tool)
+# a group folded into one button on a narrow window: Z + its letter opens it, then its own letters
+_w, _h = win.get_size()
+win.resize(900, _h)
+pump(0.4)
+win.ribbon.fit()
+pump(0.2)
+folded = [g for g in win.ribbon.pages["home"].groups if g.collapsed]
+check("a narrow window folds the groups that don't fit", folded, [g.caption for g in win.ribbon.pages["home"].groups])
+if folded:
+    win.keytips.start()
+    key("h")
+    pump(0.1)
+    zt = [t for t in win.keytips.tips() if t.startswith("Z")]
+    check("a folded group has a Z KeyTip", zt, win.keytips.tips())
+    for ch in zt[-1]:
+        key(ch.lower())
+    pump(0.3)
+    check("Z opens the folded group with its controls' KeyTips", len(win.keytips.tips()) >= 1, win.keytips.tips())
+    win.keytips.leave()
+    for g in folded:
+        if g._pop is not None:
+            g._pop.popdown()
+    pump(0.2)
+win.resize(_w, _h)
+pump(0.4)
 win.keytips.start()
 key("w")
 pump(0.1)
