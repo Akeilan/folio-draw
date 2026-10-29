@@ -1,6 +1,6 @@
 """The ribbon: tabs of captioned groups of buttons, all owned by the app.
 
-One module for Folio Writer, Sheets, Deliver and Post (X2-02). The copy in folio-suite/shared
+One module for Folio Page, Sheet, Show and Post, and the ribbon under Draw (X2-02, X3-04). The copy in folio-suite/shared
 is the one to change; folio-suite/tools/sync_shared.sh copies it into each app, and
 sync_shared.sh --check fails when an app's copy differs.
 
