@@ -291,4 +291,5 @@ check("no errors", not ERRORS, ERRORS[-1:] if ERRORS else "")
 failed = [c for c in checks if not c[1]]
 print("%d checks, %d failed" % (len(checks), len(failed)))
 
+sys.stdout.flush()
 os._exit(1 if failed else 0)
