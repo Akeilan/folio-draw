@@ -34,8 +34,10 @@ It also turns pictures into machine embroidery, which is what the Embroidery tab
 | `tests` | the audits (ui, tools, dialogs, embroidery, themes) |
 | `tools` | build and release scripts |
 
-A Rust version of the interface is being written in the `folio-cork` workspace (`folio-draw`),
-on Folio's portable base. This GTK version ships until that one passes these tests.
+**This GTK version is retired.** Folio Draw 1.11.0 and later is the Rust version on Folio's
+portable base, in the `folio-cork` workspace (`folio-draw`), which matches what this one did —
+the same file formats, the same shape-layer descriptions, the same machine files. This repository
+is kept for its history and for the audits the port was measured against.
 
 ## Building and testing
 
